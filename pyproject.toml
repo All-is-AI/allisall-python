@@ -1,0 +1,66 @@
+[project]
+name = "allisall"
+dynamic = ["version"]
+description = "The allisall API client for Python: send AI agent events."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+requires-python = ">=3.11"
+dependencies = ["httpx>=0.27,<1"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://allisai.ai"
+Documentation = "https://docs.allisai.ai"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.13",
+    "pytest>=8.3",
+    "pyyaml>=6.0.2",
+    "ruff>=0.8",
+    "types-pyyaml>=6.0.12",
+]
+
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/allisall/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/allisall"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src/allisall", "tests", "LICENSE", "NOTICE", "README.md"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "N", "ANN", "PT"]
+
+[tool.ruff.lint.isort]
+known-local-folder = ["support"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["ANN401"]
+
+[tool.mypy]
+strict = true
+python_version = "3.11"
+files = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
