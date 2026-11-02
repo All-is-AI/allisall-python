@@ -1,4 +1,4 @@
-"""Splitting: 500 events or 5,000,000 bytes of body, whichever comes first."""
+"""Splitting: 500 events or 4,000,000 bytes of body, whichever comes first."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from allisall import FieldErrorCode
 
 from support import Harness, event, sent_events, sized
 
-LIMIT = 5_000_000
+LIMIT = 4_000_000
 
 
 def body_sizes(harness: Harness) -> list[int]:
@@ -41,7 +41,7 @@ def test_501_events_make_500_then_1(make: Callable[..., Harness]) -> None:
     assert sent == [f"step_{n}" for n in range(501)]
 
 
-# Two events whose batch is exactly the limit: 13 + s1 + 1 + s2 == 5,000,000.
+# Two events whose batch is exactly the limit: 13 + s1 + 1 + s2 == 4,000,000.
 FIRST = 2_500_000
 SECOND_EXACT = LIMIT - 13 - 1 - FIRST
 
@@ -63,7 +63,7 @@ def test_one_byte_more_splits_before_the_crossing_event(make: Callable[..., Harn
 
 def test_the_largest_single_event_is_sent_alone(make: Callable[..., Harness]) -> None:
     harness = make()
-    summary = harness.ingest([sized(0, 4_999_987)])
+    summary = harness.ingest([sized(0, 3_999_987)])
     assert body_sizes(harness) == [LIMIT]
     assert summary.accepted == 1
     assert summary.errors == ()
@@ -71,7 +71,7 @@ def test_the_largest_single_event_is_sent_alone(make: Callable[..., Harness]) ->
 
 def test_an_event_one_byte_larger_is_not_sent(make: Callable[..., Harness]) -> None:
     harness = make()
-    summary = harness.ingest([sized(0, 4_999_988)])
+    summary = harness.ingest([sized(0, 3_999_988)])
     assert harness.requests == []
     assert summary.batches == 0
     assert (summary.accepted, summary.duplicates, summary.rejected) == (0, 0, 1)
@@ -79,7 +79,7 @@ def test_an_event_one_byte_larger_is_not_sent(make: Callable[..., Harness]) -> N
     assert row.index == 0
     assert row.code == FieldErrorCode.TOO_LARGE
     assert row.pointer == "/events/0"
-    assert "4999987" in row.detail
+    assert "3999987" in row.detail
 
 
 def test_sizes_are_utf8_bytes_not_characters(make: Callable[..., Harness]) -> None:

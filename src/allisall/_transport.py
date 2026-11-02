@@ -12,15 +12,29 @@ import json
 import platform
 import random
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import TypeVar
 
 import httpx
 
+from ._decode import ShapeError
 from ._errors import AllisallError, APIConnectionError, APIError
+from ._multipart import FilePart
+from ._operations import OPERATIONS
+from ._options import CallOptions, overlay
+from ._pagination import (
+    AsyncPage,
+    AsyncPaginator,
+    BodyT,
+    ItemT,
+    Page,
+    Step,
+)
+from ._request import NO_BODY, Call, ClientConfig, attempt_headers, prepare, reader
 from ._retry import MAX_RETRY_AFTER, backoff, is_retryable_status, parse_retry_after
-from ._types import FieldError, Problem, error_code, field_error_code
+from ._types import ErrorCode, FieldError, Problem, error_code, field_error_code
 from ._uuid import uuid4
 from ._version import __version__
 
@@ -28,6 +42,9 @@ T = TypeVar("T")
 
 TokenProvider = Callable[[], str]
 AsyncTokenProvider = Callable[[], str | Awaitable[str]]
+
+NO_OPTIONS = CallOptions()
+"""A call that sets no option of its own."""
 
 
 def user_agent() -> str:
@@ -67,25 +84,39 @@ def clean_token(token: str) -> str:
     return trimmed
 
 
-def request_headers(token: str, request_id: str, agent: str) -> dict[str, str]:
-    """The headers every attempt carries."""
-    return {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json",
-        "X-Request-Id": request_id,
-        "User-Agent": agent,
-    }
-
-
 def utcnow() -> datetime:
     return datetime.now(UTC)
 
 
-def read_success(response: httpx.Response, parse: Callable[[object], T]) -> T:
-    """Parse a `2xx` body. A body that is not the expected shape is an `APIError`."""
+@contextmanager
+def parts_of(call: Call) -> Iterator[list[tuple[str, FilePart]] | None]:
+    """The multipart parts of one attempt, or `None` for a call without a form. A path is
+    opened for the attempt and closed after it."""
+    if call.upload is None:
+        yield None
+        return
+    with call.upload.parts() as parts:
+        yield parts
+
+
+def ignore_body(operation_id: str) -> Callable[[bytes], None]:
+    """How the `2xx` of an operation that answers with no body is read: not at all, whatever
+    body it carries."""
+    if OPERATIONS[operation_id].status != 204:
+        raise TypeError(f"{operation_id} answers with a body")
+
+    def read(content: bytes) -> None:
+        return None
+
+    return read
+
+
+def read_success(response: httpx.Response, parse: Callable[[bytes], T]) -> T:
+    """Read a `2xx` body. A body that is not the expected shape is an `APIError`, which is
+    not retried."""
     try:
-        return parse(json.loads(response.content))
-    except ValueError as err:
+        return parse(response.content)
+    except (ValueError, ShapeError) as err:
         raise APIError(
             f"{response.status_code}: the response body is not the expected shape: {err}",
             status=response.status_code,
@@ -171,13 +202,24 @@ def _field_error(item: object) -> FieldError | None:
 
 
 def retry_wait(
-    error: APIError, attempt: int, max_retries: int, random_value: float
+    error: APIError,
+    attempt: int,
+    max_retries: int,
+    random_value: float,
+    retry_key_in_use: bool,
 ) -> float | None:
     """The wait before retrying after `error`, or `None` when it is not retried.
 
-    `attempt` counts the retries already made.
+    `attempt` counts the retries already made. With `retry_key_in_use`, a `409` whose code is
+    `idempotency_key_in_use` is retried too: the first request with the same key is still
+    running, and a later attempt can collect its outcome.
     """
-    if attempt >= max_retries or not is_retryable_status(error.status):
+    if attempt >= max_retries:
+        return None
+    key_in_use = (
+        retry_key_in_use and error.status == 409 and error.code == ErrorCode.IDEMPOTENCY_KEY_IN_USE
+    )
+    if not (key_in_use or is_retryable_status(error.status)):
         return None
     if error.retry_after is not None:
         return None if error.retry_after > MAX_RETRY_AFTER else error.retry_after
@@ -196,49 +238,110 @@ class SyncTransport:
     """Sends a request from `Allisall`, retrying as the SDK's rules allow."""
 
     def __init__(
-        self,
-        *,
-        http_client: httpx.Client,
-        token: TokenProvider,
-        timeout: float,
-        max_retries: int,
+        self, *, http_client: httpx.Client, token: TokenProvider, config: ClientConfig
     ) -> None:
         self._client = http_client
         self._token = token
-        self._timeout = httpx.Timeout(timeout)
-        self._max_retries = max_retries
-        self._user_agent = user_agent()
+        self.config = config
         self.sleep: Callable[[float], None] = time.sleep
         self.random: Callable[[], float] = random.random
         self.now: Callable[[], datetime] = utcnow
 
-    def post(self, url: httpx.URL, body: bytes, parse: Callable[[object], T]) -> T:
+    def send(self, call: Call, parse: Callable[[bytes], T]) -> T:
+        """Send `call`, retrying as its eligibility and options allow, and read its `2xx`
+        body with `parse`. An error from the token provider propagates unchanged."""
         attempt = 0
         while True:
-            token = clean_token(self._token())
+            token = clean_token(self._token()) if call.bearer else None
             request_id = uuid4()
+            headers = attempt_headers(call, token, request_id, self.config.user_agent)
             try:
-                response = self._client.post(
-                    url,
-                    content=body,
-                    headers=request_headers(token, request_id, self._user_agent),
-                    timeout=self._timeout,
-                    follow_redirects=False,
-                )
+                with parts_of(call) as files:
+                    response = self._client.request(
+                        call.method,
+                        call.url,
+                        content=call.content,
+                        files=files,
+                        headers=headers,
+                        timeout=httpx.Timeout(call.timeout),
+                        follow_redirects=False,
+                    )
             except httpx.RequestError as err:
-                if isinstance(err, httpx.TransportError) and attempt < self._max_retries:
+                if isinstance(err, httpx.TransportError) and attempt < call.max_retries:
                     attempt += 1
                     self.sleep(backoff(attempt, self.random()))
                     continue
-                raise connection_error(url, err, request_id) from err
+                raise connection_error(call.url, err, request_id) from err
             if response.is_success:
                 return read_success(response, parse)
             error = api_error(response, self.now())
-            wait = retry_wait(error, attempt, self._max_retries, self.random())
+            wait = retry_wait(
+                error, attempt, call.max_retries, self.random(), call.retry_key_in_use
+            )
             if wait is None:
                 raise error
             attempt += 1
             self.sleep(wait)
+
+    def call(
+        self,
+        operation_id: str,
+        cls: type[T],
+        *,
+        path: Sequence[tuple[str, object]] = (),
+        query: Mapping[str, object] | None = None,
+        body: object = NO_BODY,
+        options: CallOptions = NO_OPTIONS,
+        check: Callable[[T], None] | None = None,
+    ) -> T:
+        """Call an operation and decode its answer into `cls`. `check` runs on the decoded
+        answer, and a `ShapeError` it raises is an `APIError` with the answer's status."""
+        call = prepare(
+            self.config, operation_id, path=path, query=query, body=body, options=options
+        )
+        return self.send(call, reader(operation_id, cls, check))
+
+    def call_empty(
+        self,
+        operation_id: str,
+        *,
+        path: Sequence[tuple[str, object]] = (),
+        options: CallOptions = NO_OPTIONS,
+    ) -> None:
+        """Call an operation whose success has no body. Any `2xx` returns `None`."""
+        reader_ = ignore_body(operation_id)
+        call = prepare(self.config, operation_id, path=path, options=options)
+        self.send(call, reader_)
+
+    def call_page(
+        self,
+        operation_id: str,
+        cls: type[BodyT],
+        item: type[ItemT],
+        *,
+        path: Sequence[tuple[str, object]] = (),
+        query: Mapping[str, object] | None = None,
+        options: CallOptions = NO_OPTIONS,
+    ) -> Page[ItemT, BodyT]:
+        """Call a list operation and return its first page, from which the walk continues.
+        `item` is the type of the items in `cls`'s `data`."""
+
+        def load(step: Step, override: CallOptions | None) -> Page[ItemT, BodyT]:
+            request_options = options if override is None else overlay(options, override)
+            body = self.call(
+                operation_id,
+                cls,
+                path=path,
+                query=step.query,
+                options=request_options,
+                check=step.check,
+            )
+            following = step.following(body)
+            if following is None:
+                return Page(body, None)
+            return Page(body, lambda next_options: load(following, next_options))
+
+        return load(Step.start(query or {}), None)
 
 
 class AsyncTransport:
@@ -249,14 +352,11 @@ class AsyncTransport:
         *,
         http_client: httpx.AsyncClient,
         token: AsyncTokenProvider,
-        timeout: float,
-        max_retries: int,
+        config: ClientConfig,
     ) -> None:
         self._client = http_client
         self._token = token
-        self._timeout = httpx.Timeout(timeout)
-        self._max_retries = max_retries
-        self._user_agent = user_agent()
+        self.config = config
         self.sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
         self.random: Callable[[], float] = random.random
         self.now: Callable[[], datetime] = utcnow
@@ -267,30 +367,97 @@ class AsyncTransport:
             return await token
         return token
 
-    async def post(self, url: httpx.URL, body: bytes, parse: Callable[[object], T]) -> T:
+    async def send(self, call: Call, parse: Callable[[bytes], T]) -> T:
+        """As `SyncTransport.send`. Cancellation propagates unwrapped."""
         attempt = 0
         while True:
-            token = clean_token(await self._resolve_token())
+            token = clean_token(await self._resolve_token()) if call.bearer else None
             request_id = uuid4()
+            headers = attempt_headers(call, token, request_id, self.config.user_agent)
             try:
-                response = await self._client.post(
-                    url,
-                    content=body,
-                    headers=request_headers(token, request_id, self._user_agent),
-                    timeout=self._timeout,
-                    follow_redirects=False,
-                )
+                with parts_of(call) as files:
+                    response = await self._client.request(
+                        call.method,
+                        call.url,
+                        content=call.content,
+                        files=files,
+                        headers=headers,
+                        timeout=httpx.Timeout(call.timeout),
+                        follow_redirects=False,
+                    )
             except httpx.RequestError as err:
-                if isinstance(err, httpx.TransportError) and attempt < self._max_retries:
+                if isinstance(err, httpx.TransportError) and attempt < call.max_retries:
                     attempt += 1
                     await self.sleep(backoff(attempt, self.random()))
                     continue
-                raise connection_error(url, err, request_id) from err
+                raise connection_error(call.url, err, request_id) from err
             if response.is_success:
                 return read_success(response, parse)
             error = api_error(response, self.now())
-            wait = retry_wait(error, attempt, self._max_retries, self.random())
+            wait = retry_wait(
+                error, attempt, call.max_retries, self.random(), call.retry_key_in_use
+            )
             if wait is None:
                 raise error
             attempt += 1
             await self.sleep(wait)
+
+    async def call(
+        self,
+        operation_id: str,
+        cls: type[T],
+        *,
+        path: Sequence[tuple[str, object]] = (),
+        query: Mapping[str, object] | None = None,
+        body: object = NO_BODY,
+        options: CallOptions = NO_OPTIONS,
+        check: Callable[[T], None] | None = None,
+    ) -> T:
+        """As `SyncTransport.call`."""
+        call = prepare(
+            self.config, operation_id, path=path, query=query, body=body, options=options
+        )
+        return await self.send(call, reader(operation_id, cls, check))
+
+    async def call_empty(
+        self,
+        operation_id: str,
+        *,
+        path: Sequence[tuple[str, object]] = (),
+        options: CallOptions = NO_OPTIONS,
+    ) -> None:
+        """As `SyncTransport.call_empty`."""
+        reader_ = ignore_body(operation_id)
+        call = prepare(self.config, operation_id, path=path, options=options)
+        await self.send(call, reader_)
+
+    def call_page(
+        self,
+        operation_id: str,
+        cls: type[BodyT],
+        item: type[ItemT],
+        *,
+        path: Sequence[tuple[str, object]] = (),
+        query: Mapping[str, object] | None = None,
+        options: CallOptions = NO_OPTIONS,
+    ) -> AsyncPaginator[ItemT, BodyT]:
+        """As `SyncTransport.call_page`, except that nothing is sent until the result is
+        awaited or iterated."""
+
+        async def load(step: Step, override: CallOptions | None) -> AsyncPage[ItemT, BodyT]:
+            request_options = options if override is None else overlay(options, override)
+            body = await self.call(
+                operation_id,
+                cls,
+                path=path,
+                query=step.query,
+                options=request_options,
+                check=step.check,
+            )
+            following = step.following(body)
+            if following is None:
+                return AsyncPage(body, None)
+            return AsyncPage(body, lambda next_options: load(following, next_options))
+
+        first = Step.start(query or {})
+        return AsyncPaginator(lambda: load(first, None))

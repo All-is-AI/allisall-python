@@ -14,10 +14,11 @@ from datetime import datetime
 from decimal import Decimal
 from typing import cast
 
+from ._encode import aware_isoformat, check_exponent
 from ._types import EventInput, FieldErrorCode, IngestRowError, IngestSummary, field_error_code
 from ._uuid import uuid4
 
-BODY_LIMIT = 5_000_000
+BODY_LIMIT = 4_000_000
 """The largest request body `POST /v1/events` accepts, in bytes, inclusive."""
 
 MAX_BATCH_EVENTS = 500
@@ -27,7 +28,7 @@ ENVELOPE_BYTES = len(b'{"events":[') + len(b"]}")
 """The bytes of `{"events":[` and `]}`: 13."""
 
 MAX_EVENT_BYTES = BODY_LIMIT - ENVELOPE_BYTES
-"""The largest single event that can be sent, in bytes of encoded JSON: 4,999,987."""
+"""The largest single event that can be sent, in bytes of encoded JSON: 3,999,987."""
 
 _NUMERIC_MEMBERS = ("quantity", "tokens_in", "tokens_out")
 
@@ -99,7 +100,7 @@ def pack(encoded: Sequence[bytes]) -> tuple[list[Batch], list[int]]:
     """Pack encoded events into batches, greedily and in input order.
 
     A batch is closed when it holds 500 events, or before an event that would take its body
-    over 5,000,000 bytes. An event that cannot fit even alone goes in no batch; its position
+    over 4,000,000 bytes. An event that cannot fit even alone goes in no batch; its position
     is returned in the second list.
     """
     batches: list[Batch] = []
@@ -134,8 +135,9 @@ def encode_event(event: EventInput) -> bytes:
     """Encode one event as compact JSON in UTF-8, writing every member it holds.
 
     Raises `ValueError` for a value that cannot be encoded: a naive `datetime`, a non-finite
-    number, a `cost` that is not a `Decimal`, `int` or `float`, a value JSON cannot represent,
-    or text that is not valid Unicode.
+    number, a `cost` that is not a `Decimal`, `int` or `float`, a `cost` `Decimal` whose
+    exponent's magnitude is over 400, a value JSON cannot represent, or text that is not valid
+    Unicode.
     """
     members: list[str] = []
     for name, value in event.items():
@@ -151,11 +153,7 @@ def encode_event(event: EventInput) -> bytes:
 
 def _encode_member(name: str, value: object) -> str:
     if name == "timestamp" and isinstance(value, datetime):
-        if value.tzinfo is None or value.utcoffset() is None:
-            raise ValueError(
-                "timestamp is a naive datetime; give it a time zone, such as datetime.UTC"
-            )
-        return _dumps(name, value.isoformat())
+        return _dumps(name, aware_isoformat(value, "timestamp"))
     if name == "cost":
         return _encode_cost(value)
     if name in _NUMERIC_MEMBERS and isinstance(value, float) and not math.isfinite(value):
@@ -171,6 +169,8 @@ def _encode_cost(value: object) -> str:
     if isinstance(value, Decimal):
         if not value.is_finite():
             raise ValueError(f"cost is {value!r}; it must be a finite number")
+        # Checked before formatting: plain notation writes every digit of the exponent.
+        check_exponent(value, "cost")
         return format(value, "f")
     if isinstance(value, int):
         return str(value)

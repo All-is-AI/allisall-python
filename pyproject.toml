@@ -22,6 +22,7 @@ Documentation = "https://docs.allisai.ai"
 
 [dependency-groups]
 dev = [
+    "datamodel-code-generator==0.86.0",
     "mypy>=1.13",
     "pytest>=8.3",
     "pyyaml>=6.0.2",
@@ -55,11 +56,12 @@ known-local-folder = ["support"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["ANN401"]
+"src/allisall/_generated/*.py" = ["E501"]
 
 [tool.mypy]
 strict = true
 python_version = "3.11"
-files = ["src"]
+files = ["src", "examples"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

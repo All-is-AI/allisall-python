@@ -102,6 +102,45 @@ def test_a_body_that_is_not_a_problem(make: Callable[..., Harness]) -> None:
     assert error.request_id == "proxy-id"
 
 
+# A proxy in front of the API may answer 413 with a body that is not a problem document.
+@pytest.mark.parametrize(
+    ("content", "content_type"),
+    [
+        (
+            b"Request Entity Too Large",
+            "text/plain; charset=utf-8",
+        ),
+        (
+            b'{"error":"too large"}',
+            "application/json",
+        ),
+    ],
+)
+def test_a_proxys_413_that_is_not_a_problem(
+    make: Callable[..., Harness], content: bytes, content_type: str
+) -> None:
+    response = httpx.Response(
+        413,
+        content=content,
+        headers={"Content-Type": content_type},
+    )
+    # The default retries: a 413 is still sent only once.
+    harness = make(lambda request: response)
+    with pytest.raises(IngestError) as caught:
+        harness.ingest([event(0)])
+    error = caught.value.__cause__
+    assert isinstance(error, APIError)
+    assert error.status == 413
+    assert error.code is None
+    assert error.problem is None
+    assert error.request_id is None
+    assert str(error) == "413 Request Entity Too Large: the response is not a problem document"
+    assert len(harness.requests) == 1
+    assert harness.sleeps == []
+    assert caught.value.remaining_from == 0
+    assert len(caught.value.remaining) == 1
+
+
 @pytest.mark.parametrize("body", ["[1, 2]", "not json", '"a string"'])
 def test_a_problem_media_type_whose_body_is_not_an_object(
     make: Callable[..., Harness], body: str

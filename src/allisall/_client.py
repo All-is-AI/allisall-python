@@ -1,30 +1,41 @@
-"""`Allisall` and `AsyncAllisall`: options, credential and base URL resolution, and ingest."""
+"""`Allisall` and `AsyncAllisall`: options, credential and base URL resolution, and the
+operation groups."""
 
 from __future__ import annotations
 
-import math
 import os
-from collections.abc import Awaitable, Callable, Sequence
-from functools import partial
+from collections.abc import Awaitable, Callable, Mapping
 from types import TracebackType
 from typing import Self
 
 import httpx
 
-from ._errors import AllisallError, IngestError
-from ._ingest import Batch, Combiner, Plan, parse_ingest_result, prepare, remaining
+from ._errors import AllisallError
+from ._options import check_headers, check_limits
+from ._request import ClientConfig
+from ._resources.agents import AgentsResource, AsyncAgentsResource
+from ._resources.analytics import AnalyticsResource, AsyncAnalyticsResource
+from ._resources.calculations import AsyncCalculationsResource, CalculationsResource
+from ._resources.clients import AsyncClientsResource, ClientsResource
+from ._resources.cost import AsyncCostResource, CostResource
+from ._resources.dashboard import AsyncDashboardResource, DashboardResource
+from ._resources.events import AsyncEventsResource, EventsResource
+from ._resources.health import AsyncHealthResource, HealthResource
+from ._resources.imports import AsyncImportsResource, ImportsResource
+from ._resources.outcome_types import AsyncOutcomeTypesResource, OutcomeTypesResource
+from ._resources.reports import AsyncReportsResource, ReportsResource
+from ._resources.value_models import AsyncValueModelsResource, ValueModelsResource
 from ._transport import (
     CREDENTIAL_CHARACTERS,
     AsyncTransport,
     SyncTransport,
     has_invalid_credential_character,
+    user_agent,
 )
-from ._types import EventInput, IngestSummary
 
 DEFAULT_BASE_URL = "https://api.allisai.ai"
 DEFAULT_TIMEOUT = 60.0
 DEFAULT_MAX_RETRIES = 2
-INGEST_PATH = "/v1/events"
 
 
 def _check_one_credential(api_key: str | None, has_provider: bool) -> None:
@@ -78,97 +89,21 @@ def _resolve_base_url(base_url: str | None) -> httpx.URL:
     return url
 
 
-def _operation_url(base: httpx.URL, path: str) -> httpx.URL:
-    """Join the base URL and an operation's path with exactly one `/`.
-
-    The base URL's own path and query survive: `https://example.test/api?region=eu` sends
-    ingest to `https://example.test/api/v1/events?region=eu`.
-    """
-    raw_path, _, query = base.raw_path.partition(b"?")
-    joined = raw_path.rstrip(b"/") + path.encode("ascii")
-    if query:
-        joined += b"?" + query
-    return base.copy_with(raw_path=joined, fragment=None)
-
-
-def _check_limits(timeout: float, max_retries: int) -> None:
-    if not (math.isfinite(timeout) and timeout > 0):
-        raise AllisallError(
-            f"timeout must be a finite, positive number of seconds, not {timeout!r}"
-        )
-    if max_retries < 0:
-        raise AllisallError(f"max_retries must not be negative, not {max_retries!r}")
-
-
-def _failed(plan: Plan, batch: Batch, combiner: Combiner, err: Exception) -> IngestError:
-    rest, start = remaining(plan, batch)
-    return IngestError(
-        f"ingest stopped at the batch starting at events[{start}]: {err}",
-        summary=combiner.summary(),
-        remaining=rest,
-        remaining_from=start,
+def _config(
+    base_url: str | None,
+    timeout: float,
+    max_retries: int,
+    default_headers: Mapping[str, str] | None,
+) -> ClientConfig:
+    base = _resolve_base_url(base_url)
+    check_limits(timeout, max_retries)
+    return ClientConfig(
+        base_url=base,
+        timeout=timeout,
+        max_retries=max_retries,
+        default_headers=check_headers(default_headers, "default_headers"),
+        user_agent=user_agent(),
     )
-
-
-class Events:
-    """The `Events` operations of `Allisall`."""
-
-    def __init__(self, transport: SyncTransport, url: httpx.URL) -> None:
-        self._transport = transport
-        self._url = url
-
-    def ingest(self, events: Sequence[EventInput]) -> IngestSummary:
-        """Send any number of events, in as many batches as the API's limits require.
-
-        Each event without an `event_id` is given a UUID version 4; the objects passed in are
-        never modified. A batch holds at most 500 events and a 5,000,000-byte body. Batches are
-        sent one at a time, each retried as the client's `max_retries` allows. An event too
-        large to send even alone is not sent, and is reported as a rejected row with the code
-        `too_large`.
-
-        Raises `ValueError`, before sending anything, when an event cannot be encoded. Raises
-        `IngestError` when a batch fails, including when the token provider raises for one of
-        its attempts; the batches after it are not sent, and the error that failed the batch is
-        its `__cause__`.
-        """
-        plan = prepare(events)
-        combiner = Combiner(plan.too_large)
-        for batch in plan.batches:
-            try:
-                result = self._transport.post(
-                    self._url, batch.body, partial(parse_ingest_result, batch=batch)
-                )
-            except Exception as err:  # not BaseException: cancellation propagates unwrapped
-                raise _failed(plan, batch, combiner, err) from err
-            combiner.add(result)
-        return combiner.summary()
-
-
-class AsyncEvents:
-    """The `Events` operations of `AsyncAllisall`."""
-
-    def __init__(self, transport: AsyncTransport, url: httpx.URL) -> None:
-        self._transport = transport
-        self._url = url
-
-    async def ingest(self, events: Sequence[EventInput]) -> IngestSummary:
-        """Send any number of events, in as many batches as the API's limits require.
-
-        Behaves as `Allisall.events.ingest`. Cancelling the task cancels the call: the
-        `asyncio.CancelledError` propagates unwrapped, from the transport or from the token
-        provider, and the partial summary is lost.
-        """
-        plan = prepare(events)
-        combiner = Combiner(plan.too_large)
-        for batch in plan.batches:
-            try:
-                result = await self._transport.post(
-                    self._url, batch.body, partial(parse_ingest_result, batch=batch)
-                )
-            except Exception as err:  # not BaseException: cancellation propagates unwrapped
-                raise _failed(plan, batch, combiner, err) from err
-            combiner.add(result)
-        return combiner.summary()
 
 
 class Allisall:
@@ -178,13 +113,32 @@ class Allisall:
     which is called before every attempt. Without either, the `AIA_API_KEY` environment
     variable is used. `base_url` defaults to `AIA_BASE_URL`, then `https://api.allisai.ai`.
     `timeout` bounds each attempt, in seconds. `max_retries` is the number of retries after a
-    failed attempt; `0` sends one attempt. `http_client` is an `httpx.Client` to send with;
-    the caller keeps ownership of it, and `close()` leaves it open.
+    failed attempt; `0` sends one attempt. `default_headers` are sent on every request; they
+    may not name `Authorization`, `Content-Type`, `Idempotency-Key` or `X-Request-Id`, which
+    the SDK sets. `http_client` is an `httpx.Client` to send with; the caller keeps ownership
+    of it, and `close()` leaves it open.
 
-    Raises `AllisallError` when the options are not usable.
+    Raises `AllisallError` when the options are not usable, and `ValueError` when
+    `default_headers` cannot be sent.
     """
 
-    events: Events
+    events: EventsResource
+    """Ingest, and the events behind a client's totals."""
+    imports: ImportsResource
+    """CSV imports."""
+    clients: ClientsResource
+    agents: AgentsResource
+    value_models: ValueModelsResource
+    """Value models and value templates."""
+    outcome_types: OutcomeTypesResource
+    cost: CostResource
+    """Cost line items and the price table."""
+    analytics: AnalyticsResource
+    """A client's value, cost, ROI and anomalies over a period."""
+    calculations: CalculationsResource
+    reports: ReportsResource
+    dashboard: DashboardResource
+    health: HealthResource
 
     def __init__(
         self,
@@ -194,20 +148,30 @@ class Allisall:
         base_url: str | None = None,
         timeout: float = DEFAULT_TIMEOUT,
         max_retries: int = DEFAULT_MAX_RETRIES,
+        default_headers: Mapping[str, str] | None = None,
         http_client: httpx.Client | None = None,
     ) -> None:
         _check_one_credential(api_key, token_provider is not None)
         token: Callable[[], str] = (
             token_provider if token_provider is not None else _constant(_resolve_api_key(api_key))
         )
-        base = _resolve_base_url(base_url)
-        _check_limits(timeout, max_retries)
+        config = _config(base_url, timeout, max_retries, default_headers)
         self._owns_client = http_client is None
         self._http = http_client if http_client is not None else httpx.Client()
-        self._transport = SyncTransport(
-            http_client=self._http, token=token, timeout=timeout, max_retries=max_retries
-        )
-        self.events = Events(self._transport, _operation_url(base, INGEST_PATH))
+        transport = SyncTransport(http_client=self._http, token=token, config=config)
+        self._transport = transport
+        self.events = EventsResource(transport)
+        self.imports = ImportsResource(transport)
+        self.clients = ClientsResource(transport)
+        self.agents = AgentsResource(transport)
+        self.value_models = ValueModelsResource(transport)
+        self.outcome_types = OutcomeTypesResource(transport)
+        self.cost = CostResource(transport)
+        self.analytics = AnalyticsResource(transport)
+        self.calculations = CalculationsResource(transport)
+        self.reports = ReportsResource(transport)
+        self.dashboard = DashboardResource(transport)
+        self.health = HealthResource(transport)
 
     def close(self) -> None:
         """Close the HTTP connections the client opened. A caller's `http_client` stays open."""
@@ -232,10 +196,27 @@ class AsyncAllisall:
     Takes the options of `Allisall`, except that `token_provider` may also return an
     awaitable, and `http_client` is an `httpx.AsyncClient`.
 
-    Raises `AllisallError` when the options are not usable.
+    Raises `AllisallError` when the options are not usable, and `ValueError` when
+    `default_headers` cannot be sent.
     """
 
-    events: AsyncEvents
+    events: AsyncEventsResource
+    """Ingest, and the events behind a client's totals."""
+    imports: AsyncImportsResource
+    """CSV imports."""
+    clients: AsyncClientsResource
+    agents: AsyncAgentsResource
+    value_models: AsyncValueModelsResource
+    """Value models and value templates."""
+    outcome_types: AsyncOutcomeTypesResource
+    cost: AsyncCostResource
+    """Cost line items and the price table."""
+    analytics: AsyncAnalyticsResource
+    """A client's value, cost, ROI and anomalies over a period."""
+    calculations: AsyncCalculationsResource
+    reports: AsyncReportsResource
+    dashboard: AsyncDashboardResource
+    health: AsyncHealthResource
 
     def __init__(
         self,
@@ -245,20 +226,30 @@ class AsyncAllisall:
         base_url: str | None = None,
         timeout: float = DEFAULT_TIMEOUT,
         max_retries: int = DEFAULT_MAX_RETRIES,
+        default_headers: Mapping[str, str] | None = None,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         _check_one_credential(api_key, token_provider is not None)
         token: Callable[[], str | Awaitable[str]] = (
             token_provider if token_provider is not None else _constant(_resolve_api_key(api_key))
         )
-        base = _resolve_base_url(base_url)
-        _check_limits(timeout, max_retries)
+        config = _config(base_url, timeout, max_retries, default_headers)
         self._owns_client = http_client is None
         self._http = http_client if http_client is not None else httpx.AsyncClient()
-        self._transport = AsyncTransport(
-            http_client=self._http, token=token, timeout=timeout, max_retries=max_retries
-        )
-        self.events = AsyncEvents(self._transport, _operation_url(base, INGEST_PATH))
+        transport = AsyncTransport(http_client=self._http, token=token, config=config)
+        self._transport = transport
+        self.events = AsyncEventsResource(transport)
+        self.imports = AsyncImportsResource(transport)
+        self.clients = AsyncClientsResource(transport)
+        self.agents = AsyncAgentsResource(transport)
+        self.value_models = AsyncValueModelsResource(transport)
+        self.outcome_types = AsyncOutcomeTypesResource(transport)
+        self.cost = AsyncCostResource(transport)
+        self.analytics = AsyncAnalyticsResource(transport)
+        self.calculations = AsyncCalculationsResource(transport)
+        self.reports = AsyncReportsResource(transport)
+        self.dashboard = AsyncDashboardResource(transport)
+        self.health = AsyncHealthResource(transport)
 
     async def close(self) -> None:
         """Close the HTTP connections the client opened. A caller's `http_client` stays open."""

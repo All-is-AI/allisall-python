@@ -58,6 +58,42 @@ def test_counts_are_summed_and_truncation_is_any(make: Callable[..., Harness]) -
     assert summary.batches == 3
 
 
+def test_rejected_rows_without_entries_are_accepted_when_truncated(
+    make: Callable[..., Harness],
+) -> None:
+    # The API may omit every entry of a rejected row when the errors list's byte limit
+    # leaves entries out; errors_truncated then says so.
+    harness = make(lambda request: result(2, rejected=3, truncated=True))
+    summary = harness.ingest([event(n) for n in range(5)])
+    assert (summary.accepted, summary.duplicates, summary.rejected) == (2, 0, 3)
+    assert summary.errors == ()
+    assert summary.errors_truncated is True
+    assert summary.batches == 1
+
+
+def test_truncation_from_an_earlier_batch_survives_and_rejected_rows_sum(
+    make: Callable[..., Harness],
+) -> None:
+    # The truncated batch comes first, so a summary that kept only the last batch's flag
+    # would read False. The second batch is untruncated, so its one rejected row has its
+    # entry, at the caller's index 500.
+    responses = iter(
+        [
+            result(496, rejected=4, truncated=True),
+            result(0, rejected=1, errors=[row(0, "required")], truncated=False),
+        ]
+    )
+    harness = make(lambda request: next(responses))
+    summary = harness.ingest([event(n) for n in range(501)])
+    assert [len(sent_events(r)) for r in harness.requests] == [500, 1]
+    assert (summary.accepted, summary.duplicates, summary.rejected) == (496, 0, 5)
+    assert summary.errors == (
+        IngestRowError(500, FieldErrorCode.REQUIRED, "/events/500/timestamp", "timestamp is wrong"),
+    )
+    assert summary.errors_truncated is True
+    assert summary.batches == 2
+
+
 def test_an_empty_list_sends_nothing(make: Callable[..., Harness]) -> None:
     harness = make()
     summary = harness.ingest([])
@@ -70,7 +106,7 @@ def test_an_empty_list_sends_nothing(make: Callable[..., Harness]) -> None:
 def test_an_event_too_large_between_others_keeps_positions(make: Callable[..., Harness]) -> None:
     # The oversized event is left out of the batch, so the batch's index 1 is the caller's 2.
     harness = make(lambda request: result(1, rejected=1, errors=[row(1, "required")]))
-    summary = harness.ingest([event(0), sized(1, 4_999_988), event(2)])
+    summary = harness.ingest([event(0), sized(1, 3_999_988), event(2)])
     assert [e["event_type"] for e in sent_events(harness.requests[0])] == ["step_0", "step_2"]
     assert [(e.index, e.code, e.pointer) for e in summary.errors] == [
         (1, FieldErrorCode.TOO_LARGE, "/events/1"),

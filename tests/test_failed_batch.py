@@ -77,8 +77,8 @@ def test_events_too_large_are_in_the_summary_never_in_remaining(
 ) -> None:
     # Positions: 0..499 batch 1, 500 too large, 501..1000 batch 2 (fails), 1001 too large.
     events = [event(n) for n in range(1002)]
-    events[500] = sized(500, 4_999_988)
-    events[1001] = sized(1001, 4_999_988)
+    events[500] = sized(500, 3_999_988)
+    events[1001] = sized(1001, 3_999_988)
     harness = make(fail_batch(2, lambda: problem(403, "insufficient_scope")))
     with pytest.raises(IngestError) as caught:
         harness.ingest(events)

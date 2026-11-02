@@ -7,11 +7,13 @@ import json
 import re
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, TypeVar
 
 import httpx
 
 from allisall import Allisall, AsyncAllisall, EventInput, IngestSummary
+
+T = TypeVar("T")
 
 NOW = datetime(2026, 10, 28, 12, 0, 0, tzinfo=UTC)
 TEST_KEY = "aia_testkey"
@@ -131,10 +133,59 @@ class Harness:
             self.client._transport.random = lambda: fixed
         self.client._transport.now = lambda: NOW
 
-    def ingest(self, events: Sequence[EventInput]) -> IngestSummary:
+    def ingest(self, events: Sequence[EventInput], **options: Any) -> IngestSummary:
         if isinstance(self.client, Allisall):
-            return self.client.events.ingest(events)
-        return asyncio.run(self.client.events.ingest(events))
+            return self.client.events.ingest(events, **options)
+        return asyncio.run(self.client.events.ingest(events, **options))
+
+    def call(self, operation_id: str, cls: type[T], **kwargs: Any) -> T:
+        """The internal operation call, run to completion."""
+        client = self.client
+        if isinstance(client, Allisall):
+            return client._transport.call(operation_id, cls, **kwargs)
+        return asyncio.run(client._transport.call(operation_id, cls, **kwargs))
+
+    def call_empty(self, operation_id: str, **kwargs: Any) -> None:
+        client = self.client
+        if isinstance(client, Allisall):
+            client._transport.call_empty(operation_id, **kwargs)
+        else:
+            asyncio.run(client._transport.call_empty(operation_id, **kwargs))
+
+    def walk(self, operation_id: str, cls: type[Any], item: type[Any], **kwargs: Any) -> list[Any]:
+        """Every item of every page of a list call, by iterating its result."""
+        client = self.client
+        if isinstance(client, Allisall):
+            return list(client._transport.call_page(operation_id, cls, item, **kwargs))
+        aclient = client
+
+        async def run() -> list[Any]:
+            paginator = aclient._transport.call_page(operation_id, cls, item, **kwargs)
+            return [x async for x in paginator]
+
+        return asyncio.run(run())
+
+    def first_page(self, operation_id: str, cls: type[Any], item: type[Any], **kwargs: Any) -> Any:
+        """A list call's first page: the `Page`, or the awaited `AsyncPaginator`'s page."""
+        client = self.client
+        if isinstance(client, Allisall):
+            return client._transport.call_page(operation_id, cls, item, **kwargs)
+        aclient = client
+
+        async def run() -> Any:
+            return await aclient._transport.call_page(operation_id, cls, item, **kwargs)
+
+        return asyncio.run(run())
+
+    def next_page(self, page: Any, **options: Any) -> Any:
+        """`get_next_page` on a page of either kind, run to completion."""
+        if self.mode == "sync":
+            return page.get_next_page(**options)
+        return asyncio.run(page.get_next_page(**options))
+
+
+def json_response(body: Any, status: int = 200) -> httpx.Response:
+    return httpx.Response(status, json=body)
 
 
 def encoded_size(members: dict[str, Any]) -> int:

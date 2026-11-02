@@ -9,13 +9,23 @@ this version does not list is kept as a plain `str`, never refused.
 # `TypedDict`, and `EventInput.__required_keys__` would come out empty.
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Any, Literal, Required, TypedDict
+from typing import Any, Literal, Required, TypeAlias, TypedDict
 
 EventCategory = Literal["session", "task", "model", "outcome", "exception"]
 """An event category."""
+
+MoneyInput: TypeAlias = Decimal | int | float
+"""An amount of money in a request. A `Decimal` is sent with its exact digits, an `int` as its
+decimal text, and a `float` as the shortest text that reads back as the same number."""
+
+InstantInput: TypeAlias = datetime | str
+"""An instant in a request: an aware `datetime`, or RFC 3339 text sent as it is."""
+
+DateInput: TypeAlias = date | str
+"""A calendar date in a request: a `date`, or `YYYY-MM-DD` text sent as it is."""
 
 
 class EventInput(TypedDict, total=False):
@@ -135,7 +145,10 @@ class IngestSummary:
     """The combined outcome of one `ingest` call, over every batch it sent.
 
     `accepted + duplicates + rejected` equals the number of events passed in. `errors` holds
-    one entry per problem, ascending by `index`. `batches` is the number of batches sent.
+    one entry per problem, ascending by `index`. `errors_truncated` is `True` when `errors`
+    omits any problem: the API lists at most 20 problems of one event, and at most 1,000,000
+    bytes of entries for one batch. A rejected event may then have no entry; the counts
+    always cover every event. `batches` is the number of batches sent.
     """
 
     accepted: int
