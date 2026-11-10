@@ -15,7 +15,7 @@ import inspect
 import json
 import re
 import typing
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -49,10 +49,18 @@ from allisall import (
     CostLineItem,
     CostLineItemList,
     Dashboard,
+    EventArrivalList,
+    EventList,
+    EventSummary,
     Health,
+    Import,
+    ImportList,
     ImportPreview,
     ImportResult,
+    ImportSummary,
     IngestSummary,
+    Onboarding,
+    OnboardingStep,
     OutcomeTypeList,
     OutcomeTypeUsage,
     Page,
@@ -69,6 +77,9 @@ from allisall import (
     ValueModelSummary,
     ValueTemplate,
     ValueTemplateList,
+    Workspace,
+    WorkspaceCalculationList,
+    WorkspaceReportList,
 )
 from allisall._generated import requests as request_types
 from allisall._generated import responses
@@ -93,6 +104,8 @@ GROUPS = [
     "reports",
     "dashboard",
     "health",
+    "workspace",
+    "onboarding",
 ]
 
 CLIENT = "client-1"
@@ -101,6 +114,7 @@ MODEL = "model-1"
 LINE_ITEM = "item-1"
 CALCULATION = "calc-1"
 REPORT = "report-1"
+IMPORT = "import-1"
 
 KEY = "caller-key-1"
 """The `idempotency_key` passed to each of the seven idempotent methods."""
@@ -137,9 +151,12 @@ MONEY_OPERATIONS = {
     "getPriceTable",
     "getReport",
     "getValueModel",
+    "listCalculations",
     "listClientCalculations",
     "listClientEvents",
     "listCostLineItems",
+    "listEventArrivals",
+    "listEvents",
     "listValueTemplates",
     "previewImport",
     "setPriceTable",
@@ -224,6 +241,48 @@ CASES = [
         },
     ),
     Case(
+        "listEvents",
+        "events.list",
+        lambda c: c.events.list(
+            source="csv",
+            import_batch_id=IMPORT,
+            sort="cost",
+            dir_="asc",
+            page=2,
+            **OPTIONS,
+        ),
+        "GET",
+        "/v1/events",
+        EventList,
+        AttributedEvent,
+        query=(
+            ("source", "csv"),
+            ("import_batch_id", IMPORT),
+            ("sort", "cost"),
+            ("dir", "asc"),
+            ("page", "2"),
+        ),
+    ),
+    Case(
+        "getEventSummary",
+        "events.get_summary",
+        lambda c: c.events.get_summary(from_=FROM, to=TO, as_of="2026-09-02T00:00:00Z", **OPTIONS),
+        "GET",
+        "/v1/events/summary",
+        EventSummary,
+        query=(*PERIOD, ("as_of", "2026-09-02T00:00:00Z")),
+    ),
+    Case(
+        "listEventArrivals",
+        "events.list_arrivals",
+        lambda c: c.events.list_arrivals(since=FROM, limit=1, **OPTIONS),
+        "GET",
+        "/v1/events/arrivals",
+        EventArrivalList,
+        AttributedEvent,
+        query=(("since", FROM_TEXT), ("limit", "1")),
+    ),
+    Case(
         "listClientEvents",
         "events.list_for_client",
         lambda c: c.events.list_for_client(
@@ -253,6 +312,24 @@ CASES = [
             ("limit", "2"),
             ("page", "3"),
         ),
+    ),
+    Case(
+        "listImports",
+        "imports.list",
+        lambda c: c.imports.list(limit=2, page=3, **OPTIONS),
+        "GET",
+        "/v1/imports",
+        ImportList,
+        ImportSummary,
+        query=(("limit", "2"), ("page", "3")),
+    ),
+    Case(
+        "getImport",
+        "imports.get",
+        lambda c: c.imports.get(IMPORT, **OPTIONS),
+        "GET",
+        "/v1/imports/import-1",
+        Import,
     ),
     Case(
         "previewImport",
@@ -626,6 +703,18 @@ CASES = [
         query=(("limit", "2"),),
     ),
     Case(
+        "listCalculations",
+        "calculations.list",
+        lambda c: c.calculations.list(
+            client_id=CLIENT, state="published", month="2026-08", page=2, **OPTIONS
+        ),
+        "GET",
+        "/v1/calculations",
+        WorkspaceCalculationList,
+        CalculationSummary,
+        query=(("client_id", CLIENT), ("state", "published"), ("month", "2026-08"), ("page", "2")),
+    ),
+    Case(
         "getCalculation",
         "calculations.get",
         lambda c: c.calculations.get(CALCULATION, **OPTIONS),
@@ -660,6 +749,16 @@ CASES = [
         query=(("limit", "2"),),
     ),
     Case(
+        "listReports",
+        "reports.list",
+        lambda c: c.reports.list(client_id=CLIENT, state="shared", limit=2, **OPTIONS),
+        "GET",
+        "/v1/reports",
+        WorkspaceReportList,
+        ReportSummary,
+        query=(("client_id", CLIENT), ("state", "shared"), ("limit", "2")),
+    ),
+    Case(
         "getReport",
         "reports.get",
         lambda c: c.reports.get(REPORT, **OPTIONS),
@@ -670,11 +769,23 @@ CASES = [
     Case(
         "updateReport",
         "reports.update",
-        lambda c: c.reports.update(REPORT, {"note": None}, **OPTIONS),
+        lambda c: c.reports.update(
+            REPORT,
+            {
+                "letterhead_client_name": "Acme Holdings",
+                "letterhead_workspace_name": "Northwind Partners",
+                "note": None,
+            },
+            **OPTIONS,
+        ),
         "PATCH",
         "/v1/reports/report-1",
         Report,
-        body={"note": None},
+        body={
+            "letterhead_client_name": "Acme Holdings",
+            "letterhead_workspace_name": "Northwind Partners",
+            "note": None,
+        },
     ),
     Case(
         "deleteReport",
@@ -696,12 +807,24 @@ CASES = [
     Case(
         "listRenewals",
         "dashboard.list_renewals",
-        lambda c: c.dashboard.list_renewals(limit=2, **OPTIONS),
+        lambda c: c.dashboard.list_renewals(
+            today=date(2026, 11, 8),
+            window="next_30_days",
+            renewal_term=["annual", "none"],
+            limit=2,
+            **OPTIONS,
+        ),
         "GET",
         "/v1/dashboard/renewals",
         RenewalList,
         Renewal,
-        query=(("limit", "2"),),
+        query=(
+            ("today", "2026-11-08"),
+            ("window", "next_30_days"),
+            ("renewal_term", "annual"),
+            ("renewal_term", "none"),
+            ("limit", "2"),
+        ),
     ),
     Case(
         "getHealth",
@@ -710,6 +833,33 @@ CASES = [
         "GET",
         "/healthz",
         Health,
+    ),
+    Case(
+        "getWorkspace",
+        "workspace.get",
+        lambda c: c.workspace.get(**OPTIONS),
+        "GET",
+        "/v1/workspace",
+        Workspace,
+    ),
+    Case(
+        "getOnboarding",
+        "onboarding.get",
+        lambda c: c.onboarding.get(**OPTIONS),
+        "GET",
+        "/v1/onboarding",
+        Onboarding,
+    ),
+    Case(
+        "setOnboardingSkippedSteps",
+        "onboarding.set_skipped_steps",
+        lambda c: c.onboarding.set_skipped_steps(
+            {"steps": ["add_agent", "bring_in_data"]}, **OPTIONS
+        ),
+        "PUT",
+        "/v1/onboarding/skipped-steps",
+        Onboarding,
+        body={"steps": ["add_agent", "bring_in_data"]},
     ),
 ]
 
@@ -786,14 +936,15 @@ def decimals(value: object) -> list[Decimal]:
 
 def test_every_operation_has_one_case() -> None:
     ids = [case.operation_id for case in CASES]
-    assert len(ids) == 48
+    assert len(ids) == 58
     assert set(ids) == set(OPERATIONS)
 
 
 @pytest.mark.parametrize("client_class", [Allisall, AsyncAllisall])
-def test_the_client_has_exactly_the_twelve_groups(client_class: type) -> None:
+def test_the_client_has_exactly_the_fourteen_groups(client_class: type) -> None:
     client = client_class(api_key=TEST_KEY)
     public = [name for name in vars(client) if not name.startswith("_")]
+    assert len(GROUPS) == 14
     assert sorted(public) == sorted(GROUPS)
     for name in GROUPS:
         group = getattr(client, name)
@@ -870,7 +1021,7 @@ def test_each_method_sends_its_request_and_returns_its_answer(
 def test_the_money_operations_are_the_document_s() -> None:
     _, operations, _ = response_money(load_spec(), responses)
     assert operations == MONEY_OPERATIONS
-    assert len(MONEY_OPERATIONS) == 24
+    assert len(MONEY_OPERATIONS) == 27
 
 
 def complete(harness: Harness, call: Callable[[Any], Any]) -> Any:
@@ -905,8 +1056,9 @@ def test_setting_line_items_is_never_retried(make: Callable[..., Harness]) -> No
     [
         lambda c: c.clients.set_agents(CLIENT, {"agent_ids": []}, max_retries=2),
         lambda c: c.cost.set_price_table({"models": []}, max_retries=2),
+        lambda c: c.onboarding.set_skipped_steps({"steps": []}, max_retries=2),
     ],
-    ids=["clients.set_agents", "cost.set_price_table"],
+    ids=["clients.set_agents", "cost.set_price_table", "onboarding.set_skipped_steps"],
 )
 def test_the_other_put_methods_are_retried(
     make: Callable[..., Harness], call: Callable[[Any], Any]
@@ -930,8 +1082,13 @@ def test_each_put_method_says_whether_it_is_retried(client_class: type) -> None:
     assert "read the value model again for its current `version` before trying again" in (
         line_items
     )
-    for method in (client.clients.set_agents, client.cost.set_price_table):
+    for method in (
+        client.clients.set_agents,
+        client.cost.set_price_table,
+        client.onboarding.set_skipped_steps,
+    ):
         assert "Retried as `max_retries` allows, because sending the same" in flat_doc(method)
+    assert "`[]` clears every skip" in flat_doc(client.onboarding.set_skipped_steps)
 
 
 def test_a_get_method_is_retried(make: Callable[..., Harness]) -> None:
@@ -939,6 +1096,54 @@ def test_a_get_method_is_retried(make: Callable[..., Harness]) -> None:
     with pytest.raises(allisall.APIError):
         complete(harness, lambda c: c.clients.get(CLIENT, max_retries=2))
     assert len(harness.requests) == 3
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda c: c.workspace.get(),
+        lambda c: c.onboarding.get(),
+        lambda c: c.onboarding.set_skipped_steps({"steps": ["add_agent"]}),
+    ],
+    ids=["workspace.get", "onboarding.get", "onboarding.set_skipped_steps"],
+)
+def test_the_guided_setup_methods_make_three_attempts_against_three_500s(
+    make: Callable[..., Harness], call: Callable[[Any], Any]
+) -> None:
+    harness = make(lambda r: httpx.Response(500))
+    with pytest.raises(allisall.APIError):
+        complete(harness, call)
+    assert len(harness.requests) == 3
+
+
+ONBOARDING_WITH_A_NEW_STEP: dict[str, object] = {
+    "steps": [
+        {"step": "add_client", "completed": True, "skipped_at": None},
+        {"step": "a_step_added_later", "completed": False, "skipped_at": "2026-11-02T10:05:00Z"},
+    ],
+    "current_step": "a_step_added_later",
+    "has_published": False,
+}
+
+
+def test_a_step_the_enum_does_not_list_is_kept_as_a_str(make: Callable[..., Harness]) -> None:
+    harness = make(lambda r: httpx.Response(200, json=ONBOARDING_WITH_A_NEW_STEP))
+    progress = complete(harness, lambda c: c.onboarding.get())
+    assert isinstance(progress, Onboarding)
+    assert progress.current_step == "a_step_added_later"
+    assert type(progress.current_step) is str
+    first, second = progress.steps
+    assert first.step is OnboardingStep.ADD_CLIENT
+    assert second.step == "a_step_added_later"
+    assert type(second.step) is str
+    assert second.skipped_at is not None
+
+
+def test_a_null_current_step_is_none(make: Callable[..., Harness]) -> None:
+    body = {**ONBOARDING_WITH_A_NEW_STEP, "current_step": None}
+    harness = make(lambda r: httpx.Response(200, json=body))
+    progress = complete(harness, lambda c: c.onboarding.get())
+    assert progress.current_step is None
 
 
 # --- Walks ---
@@ -974,12 +1179,16 @@ def test_a_list_method_walks_every_page(make: Callable[..., Harness], case: Case
     assert all(isinstance(item, case.item) for item in items)
     first, second = harness.requests
     assert first.url.params.multi_items() == list(case.query)
-    # The same filters, without `page`, and the first page's cursor.
-    expected = {name: value for name, value in case.query if name != "page"}
-    expected["cursor"] = "next-1"
-    sent = second.url.params.multi_items()
-    assert len(sent) == len(expected)
-    assert dict(sent) == expected
+    # The same filters, in order and repeated as sent, without `page`, and the first page's
+    # cursor in place of the caller's, or after the filters when the caller sent none.
+    expected = [
+        (name, "next-1" if name == "cursor" else value)
+        for name, value in case.query
+        if name != "page"
+    ]
+    if all(name != "cursor" for name, _ in case.query):
+        expected.append(("cursor", "next-1"))
+    assert second.url.params.multi_items() == expected
     assert second.url.raw_path.split(b"?")[0].decode() == case.path
     assert second.headers["x-trace"] == "t-1"
 
@@ -987,8 +1196,12 @@ def test_a_list_method_walks_every_page(make: Callable[..., Harness], case: Case
 REPORT_SUMMARY: dict[str, object] = {
     "id": "report-1",
     "calculation_id": CALCULATION,
-    "client_name": "Acme",
-    "workspace_name": "Northwind",
+    "client_id": CLIENT,
+    "client_name": "Acme Logistics",
+    "period": {"from": "2026-08-01T00:00:00Z", "to": "2026-09-01T00:00:00Z"},
+    "state": "draft",
+    "letterhead_client_name": "Acme",
+    "letterhead_workspace_name": "Northwind",
     "note": "",
     "share_token": None,
     "shared_at": None,
@@ -1015,15 +1228,16 @@ def test_a_report_list_item_is_a_summary_without_disclosures(
     page = result if harness.mode == "sync" else asyncio.run(_await(result))
     assert [type(item) for item in page.data] == [ReportSummary, ReportSummary]
     assert [item.id for item in page.data] == ["report-1", "report-2"]
-    assert page.data[0].client_name == "Acme"
+    assert page.data[0].client_name == "Acme Logistics"
+    assert page.data[0].letterhead_client_name == "Acme"
     assert page.data[0].created_at == "2026-09-01T00:00:00Z"
     for item in page.data:
         assert not hasattr(item, "disclosures")
     assert "disclosures" not in {f.name for f in dataclasses.fields(ReportSummary)}
 
 
-def test_eleven_methods_are_lists() -> None:
-    assert len(LISTS) == 11
+def test_sixteen_methods_are_lists() -> None:
+    assert len(LISTS) == 16
 
 
 # --- The two classes of a group ---
@@ -1143,9 +1357,13 @@ def naming_differences(document: dict[str, Any], client: object) -> list[str]:
 def test_the_method_names_follow_the_naming_rule_both_ways(client_class: type) -> None:
     document = load_spec()
     client = client_class(api_key=TEST_KEY)
-    assert len(expected_methods(document)) == 48
+    assert len(expected_methods(document)) == 58
     assert naming_differences(document, client) == []
-    assert len(actual_methods(client)) == 48
+    assert len(actual_methods(client)) == 58
+    # The 0.3 operations take the rule's names, with no new exception.
+    assert {"workspace.get", "onboarding.get", "onboarding.set_skipped_steps"} <= (
+        actual_methods(client)
+    )
 
 
 def test_the_naming_rule_reports_a_new_operation_missing() -> None:
@@ -1183,6 +1401,7 @@ PATH_NAMES = {
     "agents": "agent_id",
     "value-models": "value_model_id",
     "cost-line-items": "line_item_id",
+    "imports": "import_id",
     "calculations": "calculation_id",
     "reports": "report_id",
 }
@@ -1211,9 +1430,14 @@ def query_type(document: dict[str, Any], schema: dict[str, Any]) -> object:
     ref = schema.get("$ref", "").rsplit("/", 1)[-1]
     if ref == "InstantInput":
         return datetime | str
+    if ref == "DateInput":
+        return date | str
     if ref in ("UuidInput", "Month"):
         return str
     schema = resolve(document, schema)
+    if schema.get("type") == "array":
+        # A repeatable parameter: a sequence of the item's type.
+        return Sequence[query_type(document, schema["items"])]
     if "enum" in schema:
         return Literal[tuple(schema["enum"])]
     return {"integer": int, "string": str}[schema["type"]]
@@ -1322,3 +1546,26 @@ def test_each_docstring_names_its_operation_and_scope(client_class: type) -> Non
             assert f"Needs the `{fact.scope}` scope." in doc, method
         if fact.body == "merge-patch":
             assert "`None` clears the member" in doc, method
+
+
+def test_a_client_s_renewal_term_is_sent_and_returned_and_none_clears_it(
+    make: Callable[..., Harness],
+) -> None:
+    answers = iter({**sample(Client), "renewal_term": term} for term in ("annual", "monthly", None))
+    harness = make(lambda request: httpx.Response(200, json=next(answers)))
+    created = complete(
+        harness,
+        lambda c: c.clients.create(
+            {"name": "Acme", "status": "active", "renewal_term": "annual"}, idempotency_key=KEY
+        ),
+    )
+    assert created.renewal_term is allisall.RenewalTerm.ANNUAL
+    patched = complete(harness, lambda c: c.clients.update(CLIENT, {"renewal_term": "monthly"}))
+    assert patched.renewal_term is allisall.RenewalTerm.MONTHLY
+    cleared = complete(harness, lambda c: c.clients.update(CLIENT, {"renewal_term": None}))
+    assert cleared.renewal_term is None
+    assert [json.loads(request.content) for request in harness.requests] == [
+        {"name": "Acme", "status": "active", "renewal_term": "annual"},
+        {"renewal_term": "monthly"},
+        {"renewal_term": None},
+    ]

@@ -166,3 +166,14 @@ def test_a_changed_spec_fails_the_comparison(mutate: Any, expected: str) -> None
     found = mismatches(spec)
     assert len(found) == 1
     assert found[0].startswith(expected)
+
+
+def test_error_code_holds_the_invite_and_workspace_codes() -> None:
+    assert {
+        "invite_expired",
+        "invite_used",
+        "invite_revoked",
+        "invite_email_mismatch",
+        "email_has_workspace",
+        "upstream_failed",
+    } <= {code.value for code in ErrorCode}

@@ -87,8 +87,8 @@ def answer(operation_id: str) -> Callable[[httpx.Request], httpx.Response]:
 
 
 def test_every_operation_is_covered_once() -> None:
-    assert len(ALL) == 48
-    assert len(set(ALL)) == 48
+    assert len(ALL) == 58
+    assert len(set(ALL)) == 58
 
 
 @pytest.mark.parametrize("operation_id", ALL)

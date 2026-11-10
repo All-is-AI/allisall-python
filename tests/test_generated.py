@@ -307,7 +307,7 @@ def test_a_changed_spec_makes_the_committed_files_stale(
 def test_every_response_money_value_is_a_decimal() -> None:
     count, operations, wrong = response_money(load_spec(), responses)
     assert wrong == []
-    assert (count, len(operations)) == (122, 24)
+    assert (count, len(operations)) == (126, 27)
 
 
 def test_every_request_money_member_is_widened() -> None:
@@ -392,13 +392,19 @@ def test_every_open_site_in_a_response_is_an_enum_or_a_string() -> None:
             args = typing.get_args(strip(hint))
             assert str in args, where
             enum = next(arg for arg in args if arg is not str)
-            if where in ("AttributedEvent.category", "PreviewEvent.category"):
+            if where in (
+                "AttributedEvent.category",
+                "PreviewEvent.category",
+                "EventCategoryCount.category",
+            ):
                 # The event category keeps its Literal, and decodes to str.
                 assert enum == _types.EventCategory, where
             else:
                 assert isinstance(enum, type), where
                 assert issubclass(enum, StrEnum), where
-    assert len(sites) == 21
+    # The guided setup's two among them: a step's `step`, and `current_step`.
+    assert {"OnboardingStepProgress.step", "Onboarding.current_step"} <= sites
+    assert len(sites) == 29
 
     # And no annotation is open that the document does not make open.
     generated_open = {
@@ -674,15 +680,59 @@ PUBLIC_NAMES = {
     "ValueTemplate",
     "ValueTemplateLineItem",
     "ValueTemplateList",
+    # 0.3's: the workspace and the guided setup.
+    "Workspace",
+    "Onboarding",
+    "OnboardingStepProgress",
+    "OnboardingStep",
+    "OnboardingSkippedStepsSet",
+    # 0.4's: the workspace calculations and reports lists, and a report's state.
+    "ReportState",
+    "WorkspaceCalculationList",
+    "WorkspaceReportList",
+    # The imports reads, and the conversion of the mapping an import ran with.
+    "AppliedImportMapping",
+    "Import",
+    "ImportDelimiter",
+    "ImportList",
+    "ImportSummary",
+    "to_import_mapping",
+    # The workspace events, their summary and their arrivals.
+    "EventArrivalList",
+    "EventCategoryCount",
+    "EventDayCount",
+    "EventList",
+    "EventSummary",
+    # The renewal term, and the renewals list's filters.
+    "RenewalTerm",
+    "RenewalTermFilter",
+    "RenewalWindow",
 }
+
+# Reached only by operations the SDK does not call, so never written or exported.
+NOT_EXPOSED = {"InviteRedemption", "WorkspaceCreate", "OpenInvite"}
 
 
 def test_the_public_names() -> None:
-    assert len(PUBLIC_NAMES) == 15 + 4 + 93
+    assert len(PUBLIC_NAMES) == 15 + 4 + 1 + 114
     assert set(allisall.__all__) == PUBLIC_NAMES
     assert len(allisall.__all__) == len(PUBLIC_NAMES)
     for name in allisall.__all__:
         assert hasattr(allisall, name), name
+    for name in NOT_EXPOSED:
+        assert name not in allisall.__all__, name
+        assert not hasattr(allisall, name), name
+        assert not hasattr(requests, name), name
+        assert not hasattr(responses, name), name
+
+
+def test_the_guided_setup_types_take_each_direction_s_shape() -> None:
+    # The response enum is exported; the request body names only the listed steps.
+    assert allisall.OnboardingStep is responses.OnboardingStep
+    assert issubclass(allisall.OnboardingStep, StrEnum)
+    assert allisall.OnboardingSkippedStepsSet is requests.OnboardingSkippedStepsSet
+    (step,) = typing.get_args(typing.get_type_hints(requests.OnboardingSkippedStepsSet)["steps"])
+    assert set(typing.get_args(step)) == {member.value for member in responses.OnboardingStep}
 
 
 def test_the_schema_names_follow_the_export_rule() -> None:
@@ -691,7 +741,8 @@ def test_the_schema_names_follow_the_export_rule() -> None:
     reached = script().reached(document, script().request_roots(document)) | script().reached(
         document, script().response_roots(document)
     )
-    assert len(reached) == 111
+    assert len(reached) == 133
+    assert not reached & NOT_EXPOSED
     scalars = {
         "Uuid",
         "UuidInput",
@@ -701,6 +752,7 @@ def test_the_schema_names_follow_the_export_rule() -> None:
         "DateInput",
         "Month",
         "Currency",
+        "SearchText",
         "MinorUnits",
         "Money",
         "Ratio",
@@ -708,7 +760,7 @@ def test_the_schema_names_follow_the_export_rule() -> None:
     kept = {"EventCategory", "EventInput", "IngestRowError", "FieldErrorCode"}
     internal = {"EventBatch", "IngestResult", "ImportUpload"}
     exported = reached - scalars - kept - internal
-    assert len(exported) == 93
+    assert len(exported) == 114
     assert exported <= PUBLIC_NAMES
 
 

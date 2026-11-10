@@ -56,7 +56,9 @@ known-local-folder = ["support"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["ANN401"]
-"src/allisall/_generated/*.py" = ["E501"]
+# The generated files carry the spec's prose in their docstrings: long lines, and characters
+# such as the minus sign U+2212, which the spec writes on purpose.
+"src/allisall/_generated/*.py" = ["E501", "RUF001", "RUF002"]
 
 [tool.mypy]
 strict = true

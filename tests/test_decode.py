@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import Any
 
 import pytest
 
 from allisall import (
+    AppliedImportMapping,
     AttributedEvent,
     ClientEventList,
     ClientStatus,
@@ -18,10 +21,15 @@ from allisall import (
     FieldErrorCode,
     ImportPreview,
     Period,
+    Report,
+    ReportState,
+    ReportSummary,
     ValueLine,
+    ValueModel,
 )
 from allisall._decode import ShapeError, build, decode, parse
 from allisall._encode import encode_body
+from samples import sample
 
 # More significant digits than a binary float carries.
 EXACT = "0.1234567890123456789"
@@ -105,6 +113,10 @@ def attributed_event(**members: Any) -> dict[str, Any]:
         "model": None,
         "client_key": None,
         "source": "api",
+        "created_at": "2026-08-02T10:00:01Z",
+        "import_batch_id": None,
+        "client_id": None,
+        "client_name": None,
     }
     event.update(members)
     return event
@@ -226,6 +238,7 @@ def test_client_status_decodes_to_the_enum_or_the_unknown_str() -> None:
                 "status": status,
                 "client_key": None,
                 "renewal_date": None,
+                "renewal_term": None,
                 "notes": "",
                 "created_at": "2026-01-01T00:00:00Z",
             },
@@ -284,6 +297,108 @@ def test_instants_and_dates_stay_strings() -> None:
     assert item.created_at == "2026-01-01T00:00:00Z"
     event = build(AttributedEvent, attributed_event())
     assert event.timestamp == "2026-08-02T10:00:00.123456Z"
+
+
+def test_archived_at_stays_a_string_and_null_is_none() -> None:
+    body = {**sample(ValueModel), "line_items": [], "archived_at": "2026-08-02T04:15:00Z"}
+    assert build(ValueModel, body).archived_at == "2026-08-02T04:15:00Z"
+    assert build(ValueModel, {**body, "archived_at": None}).archived_at is None
+    # A server older than the member's introduction omits it, which the decoder refuses.
+    without = {name: value for name, value in body.items() if name != "archived_at"}
+    with pytest.raises(ShapeError, match="archived_at"):
+        build(ValueModel, without)
+
+
+REPORT: dict[str, Any] = {
+    "id": "report-1",
+    "calculation_id": "calc-1",
+    "client_id": "client-1",
+    "client_name": "Acme Logistics",
+    "period": {"from": "2026-08-01T00:00:00Z", "to": "2026-09-01T00:00:00Z"},
+    "state": "shared",
+    "letterhead_client_name": "Acme",
+    "letterhead_workspace_name": "Northwind",
+    "note": "",
+    "share_token": "tok",
+    "shared_at": "2026-09-02T00:00:00Z",
+    "revoked_at": None,
+    "first_viewed_at": None,
+    "last_viewed_at": None,
+    "created_at": "2026-09-01T00:00:00Z",
+    "disclosures": [],
+}
+
+
+def test_a_report_decodes_the_renamed_letterhead_and_the_record_name() -> None:
+    report = build(Report, REPORT)
+    assert report.client_name == "Acme Logistics"
+    assert report.letterhead_client_name == "Acme"
+    assert report.letterhead_workspace_name == "Northwind"
+    assert report.client_id == "client-1"
+    assert report.period.from_ == "2026-08-01T00:00:00Z"
+    assert report.state is ReportState.SHARED
+    assert not hasattr(report, "workspace_name")
+
+
+def test_a_report_with_the_old_letterhead_only_is_the_wrong_shape() -> None:
+    # As a server older than the rename answers: the letterhead under its old names, and none
+    # of the members the rename added.
+    old = {
+        name: value
+        for name, value in REPORT.items()
+        if name
+        not in (
+            "letterhead_client_name",
+            "letterhead_workspace_name",
+            "client_id",
+            "period",
+            "state",
+        )
+    }
+    old["workspace_name"] = "Northwind"
+    with pytest.raises(ShapeError, match=r"client_id|letterhead|period|state"):
+        build(Report, old)
+
+
+def test_a_report_state_the_sdk_does_not_list_stays_a_str() -> None:
+    summary = build(ReportSummary, {**REPORT, "state": "archived"})
+    assert summary.state == "archived"
+    assert not isinstance(summary.state, ReportState)
+    assert type(summary.state) is str
+    assert build(ReportSummary, {**REPORT, "state": "revoked"}).state is ReportState.REVOKED
+
+
+def test_a_mapping_of_strings_decodes_to_a_dict_and_refuses_another_shape() -> None:
+    applied = {
+        "columns": {"timestamp": "Time", "a/b": "C"},
+        "constants": {},
+        "timezone": "UTC",
+        "delimiter": ",",
+    }
+    mapping = build(AppliedImportMapping, applied)
+    assert mapping.columns == {"timestamp": "Time", "a/b": "C"}
+    assert type(mapping.columns) is dict
+    assert mapping.constants == {}
+    with pytest.raises(ShapeError, match="/columns: expected an object, found an array"):
+        build(AppliedImportMapping, {**applied, "columns": ["Time"]})
+
+
+@dataclass(frozen=True, kw_only=True)
+class _Amounts:
+    """A test-local response class whose mapping's values are money, so each value has to go
+    through its own builder."""
+
+    amounts: Mapping[str, Decimal]
+
+
+def test_a_mapping_builds_each_value_as_its_type_and_names_a_bad_one_by_pointer() -> None:
+    built = build(_Amounts, parse('{"amounts": {"a/b": 12.50, "c": 3}}'))
+    assert built.amounts == {"a/b": Decimal("12.50"), "c": Decimal(3)}
+    assert all(type(value) is Decimal for value in built.amounts.values())
+    with pytest.raises(
+        ShapeError, match=r"^/amounts/a~1b: expected a number for an amount of money"
+    ):
+        build(_Amounts, parse('{"amounts": {"a/b": "12.50"}}'))
 
 
 def test_an_array_is_a_tuple_and_the_result_is_frozen() -> None:

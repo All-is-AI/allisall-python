@@ -103,6 +103,25 @@ class CalculationState(StrEnum):
     PUBLISHED = "published"
 
 
+class ReportState(StrEnum):
+    """
+    A report's position in its lifecycle: `draft` until it is shared, `shared` while its link works, and `revoked` once the link is revoked. A state only moves forward.
+    """
+
+    DRAFT = "draft"
+    SHARED = "shared"
+    REVOKED = "revoked"
+
+
+class RenewalTerm(StrEnum):
+    """
+    How often a client's renewal recurs: every month, or every year. Each renewal is the date as set plus whole terms, on the same day of the month, or on the month's last day when the month is shorter: a monthly renewal set on 31 January falls on 28 February, then 31 March.
+    """
+
+    MONTHLY = "monthly"
+    ANNUAL = "annual"
+
+
 class CostTargetKind(StrEnum):
     """
     What a cost line item is charged to.
@@ -195,7 +214,17 @@ class Client:
     """
     status: ClientStatus | str
     client_key: str | None
+    """
+    The external identifier partners use for this client in event data. `null` when unset.
+    """
     renewal_date: Date | None
+    """
+    For an active client with a `renewal_term`, the next renewal on or after the current UTC date: the date as set, rolled forward by whole terms once it passes, keeping its day of the month, or the month's last day when the month is shorter. Otherwise the date as set, which may be past. `null` when unset.
+    """
+    renewal_term: RenewalTerm | str | None
+    """
+    How often the renewal recurs. `null` when the client has no term, and its renewal date stays as set. A client can hold a term without a renewal date; the term applies once a date is set.
+    """
     notes: str
     """
     Free text, `""` when empty.
@@ -226,6 +255,9 @@ class ClientDetail(Client):
     The assigned agents, ordered by name, case-insensitively.
     """
     earliest_activity_at: Instant | None
+    """
+    The first instant anything about this client could be true: its earliest attributed event, or the start of the earliest charge reaching it. `null` when it has neither.
+    """
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -369,6 +401,10 @@ class ValueModel:
     currency: Currency
     created_at: Instant
     updated_at: Instant
+    archived_at: Instant | None
+    """
+    When the model was archived; `null` unless `status` is `archived`.
+    """
     line_items: Sequence[ValueLineItem]
     """
     At most 50, ordered by `position`.
@@ -440,6 +476,9 @@ class OutcomeTypeUsage:
     The summed event quantity.
     """
     priced: bool | None
+    """
+    Whether the client's active value model prices this outcome type. `null` where no single client's model applies: the workspace-wide list and value coverage findings.
+    """
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -472,6 +511,9 @@ class CostLineItem:
     currency: Currency
     start_date: Date
     end_date: Date | None
+    """
+    Inclusive. `null` while the charge is still running.
+    """
     created_at: Instant
     updated_at: Instant
 
@@ -516,7 +558,13 @@ class Ratios:
     """
 
     roi: Ratio | None
+    """
+    `(value − cost) / cost`, from the rounded totals.
+    """
     value_to_cost: Ratio | None
+    """
+    `value / cost`, from the rounded totals.
+    """
     undefined_reason: UndefinedReason | str | None
 
 
@@ -604,6 +652,9 @@ class ValueResult:
     One line for each line item of the model, in line-item order, so at most 50. An outcome type no line item prices is never a line; it is listed in `coverage.unpriced_outcome_types`.
     """
     total: Decimal | None
+    """
+    `null` together with `value_model` when the client has no active model: not priced, which differs from zero.
+    """
     coverage: ValueCoverage
 
 
@@ -863,7 +914,7 @@ class Anomalies:
 @dataclass(frozen=True, kw_only=True)
 class AttributedEvent:
     """
-    One event behind a client's totals.
+    An event as stored, with its agent's name and the client it counts toward.
     """
 
     id: str
@@ -878,17 +929,39 @@ class AttributedEvent:
     outcome_type: str | None
     quantity: float
     cost: Decimal | None
+    """
+    In the response's `currency`.
+    """
     tokens_in: int | None
     tokens_out: int | None
     model: str | None
     client_key: str | None
+    """
+    The key the event carried, as stored: as sent to `POST /v1/events`, trimmed by a CSV import. `null` when it carried none, or only whitespace.
+    """
     source: EventSource | str
+    created_at: Instant
+    """
+    When the API stored the event. An imported or late event arrives after its `timestamp`, sometimes long after.
+    """
+    import_batch_id: Uuid | None
+    """
+    The CSV import that wrote the event, or `null` when it was sent to `POST /v1/events`.
+    """
+    client_id: Uuid | None
+    """
+    The client the event counts toward: the client whose key it carried, or, when it carried none, the one client its agent is assigned to. `null` when it counts toward no client: its key names none, or it carried no key and its agent is assigned to no client or to several.
+    """
+    client_name: str | None
+    """
+    The name of the client in `client_id`, or `null` with it.
+    """
 
 
 @dataclass(frozen=True, kw_only=True)
 class ClientEventList:
     """
-    The events behind a client's totals. The shared list envelope plus this list's own members. It is the one list that also takes `page` and returns `total`; `page` and the cursor are one offset with two spellings.
+    The events behind a client's totals. The shared list envelope plus this list's own members. It is the one list that returns `total` on every request, and the one whose `page` and cursor are one offset with two spellings.
     """
 
     client_id: Uuid
@@ -898,6 +971,9 @@ class ClientEventList:
     The currency of every `cost` in `data`, given once here. An event's stored `currency` is not exposed: it is always `null` or the workspace currency, because a mismatching event is refused.
     """
     page: int | None
+    """
+    The page requested, or `null` when the request used `cursor`.
+    """
     total: int
     """
     Every event matching the filters, not only this page.
@@ -908,6 +984,128 @@ class ClientEventList:
     """
     has_more: bool
     next_cursor: str | None
+    """
+    Opaque. Encodes the offset after this page.
+    """
+
+
+@dataclass(frozen=True, kw_only=True)
+class EventList:
+    """
+    The workspace's events: newest first by `timestamp`, then by id, unless `sort` asks for another order.
+    """
+
+    as_of: Instant
+    """
+    The arrival limit this page was read under: the `as_of` sent, the cursor's, or the one issued. Send it on later requests to read the same events.
+    """
+    period: Period
+    """
+    The period sent. Both bounds are `null` when neither was sent.
+    """
+    client_id: Uuid | None
+    """
+    The `client_id` filter, or `null` when none was sent.
+    """
+    currency: Currency
+    """
+    The currency of every `cost` in `data`, given once here.
+    """
+    page: int | None
+    """
+    The page requested, or `null` when the request did not send `page`.
+    """
+    total: int | None
+    """
+    Every event matching the filters, up to 10,000, or `null` when the request did not send `page`. With `import_batch_id` it is exact, and may pass 10,000.
+    """
+    total_capped: bool | None
+    """
+    `true` when more than 10,000 events matched and `total` is 10,000; `false` when `total` is exact; `null` when the request did not send `page`.
+    """
+    data: Sequence[AttributedEvent]
+    """
+    At most `limit`, in the requested order; ties break on the event id, descending.
+    """
+    has_more: bool
+    """
+    Whether another page exists.
+    """
+    next_cursor: str | None
+    """
+    The opaque cursor for the next page. It carries `as_of`. Clients must not parse it.
+    """
+
+
+@dataclass(frozen=True, kw_only=True)
+class EventDayCount:
+    """
+    The events whose `timestamp` falls in one day of the period.
+    """
+
+    start: Instant
+    """
+    Where the day starts. It ends 24 hours later, or at the period's end.
+    """
+    count: int
+
+
+@dataclass(frozen=True, kw_only=True)
+class EventCategoryCount:
+    """
+    The events of one category.
+    """
+
+    category: EventCategory | str
+    count: int
+
+
+@dataclass(frozen=True, kw_only=True)
+class EventArrivalList:
+    """
+    The workspace's events in the order the API stored them, newest first, then by id descending.
+    """
+
+    as_of: Instant
+    """
+    The end of the arrival window, exclusive. Send it as the next poll's `since`.
+    """
+    since: Instant | None
+    """
+    The start of the arrival window, inclusive, or `null` when none was sent.
+    """
+    period: Period
+    """
+    The bounds sent. A bound not sent is `null`.
+    """
+    client_id: Uuid | None
+    """
+    The `client_id` filter, or `null` when none was sent.
+    """
+    currency: Currency
+    """
+    The currency of every `cost` in `data`, given once here.
+    """
+    count: int | None
+    """
+    The matching events in the window, from `since` to `as_of`, up to 10,000; `null` without `since`.
+    """
+    count_capped: bool | None
+    """
+    `true` when more than 10,000 events matched and `count` is 10,000; `null` without `since`.
+    """
+    data: Sequence[AttributedEvent]
+    """
+    At most `limit`, newest arrival first; ties break on the event id, descending.
+    """
+    has_more: bool
+    """
+    Whether another page exists.
+    """
+    next_cursor: str | None
+    """
+    The opaque cursor for the next page. It carries `as_of`. Clients must not parse it.
+    """
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -948,6 +1146,9 @@ class Calculation:
     currency: Currency
     minor_units: MinorUnits
     value_total: Decimal | None
+    """
+    `null` when the client had no active value model.
+    """
     cost_total: Decimal
     ratios: Ratios
     checklist: Checklist
@@ -960,16 +1161,23 @@ class Calculation:
 @dataclass(frozen=True, kw_only=True)
 class CalculationSummary:
     """
-    A calculation as the list returns it: without `snapshot`, with `is_current`.
+    A calculation as the lists return it: without `snapshot`, with `is_current`, the client's name and the number of coverage findings.
     """
 
     id: Uuid
     client_id: Uuid
+    client_name: str
+    """
+    The client's name as its record holds it now.
+    """
     state: CalculationState | str
     period: Period
     currency: Currency
     minor_units: MinorUnits
     value_total: Decimal | None
+    """
+    `null` when the client had no active value model.
+    """
     cost_total: Decimal
     ratios: Ratios
     checklist: Checklist
@@ -977,6 +1185,13 @@ class CalculationSummary:
     validated_at: Instant | None
     published_at: Instant | None
     is_current: bool | None
+    """
+    Whether this is the figure for its period: the latest publication covering it. `null` when the calculation is not published.
+    """
+    coverage_findings: int
+    """
+    How many coverage findings the calculation's frozen figures hold: the disclosures a report on it would list, including those a report leaves out of the shared copy by default.
+    """
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -995,6 +1210,9 @@ class Disclosure:
     Whether the finding goes out on the shared report.
     """
     text: str | None
+    """
+    The owner's own wording. `null` means use the default sentence, which `""` would not.
+    """
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -1005,13 +1223,26 @@ class Report:
 
     id: Uuid
     calculation_id: Uuid
+    client_id: Uuid
+    """
+    The client of the report's calculation.
+    """
     client_name: str
     """
-    Free text, as the recipient sees it.
+    The client's name as its record holds it now, so renaming the client renames it on every report. The recipient sees `letterhead_client_name` instead.
     """
-    workspace_name: str
+    period: Period
     """
-    Free text, as the recipient sees it.
+    The period of the report's calculation.
+    """
+    state: ReportState | str
+    letterhead_client_name: str
+    """
+    Free text, as the recipient sees it: the letterhead's "For" line. It starts as the client's name and may differ from it.
+    """
+    letterhead_workspace_name: str
+    """
+    Free text, as the recipient sees it: the letterhead's "From" line. It starts as the workspace's name and may differ from it.
     """
     note: str
     """
@@ -1022,6 +1253,9 @@ class Report:
     In the order the calculation's coverage produced them. At most 12: each kind appears at most once.
     """
     share_token: str | None
+    """
+    The link token, once shared. `null` before the report is shared.
+    """
     shared_at: Instant | None
     revoked_at: Instant | None
     first_viewed_at: Instant | None
@@ -1037,19 +1271,35 @@ class ReportSummary:
 
     id: Uuid
     calculation_id: Uuid
+    client_id: Uuid
+    """
+    The client of the report's calculation.
+    """
     client_name: str
     """
-    Free text, as the recipient sees it.
+    The client's name as its record holds it now, so renaming the client renames it on every report. The recipient sees `letterhead_client_name` instead.
     """
-    workspace_name: str
+    period: Period
     """
-    Free text, as the recipient sees it.
+    The period of the report's calculation.
+    """
+    state: ReportState | str
+    letterhead_client_name: str
+    """
+    Free text, as the recipient sees it: the letterhead's "For" line. It starts as the client's name and may differ from it.
+    """
+    letterhead_workspace_name: str
+    """
+    Free text, as the recipient sees it: the letterhead's "From" line. It starts as the workspace's name and may differ from it.
     """
     note: str
     """
     Free text, `""` when empty.
     """
     share_token: str | None
+    """
+    The link token, once shared. `null` before the report is shared.
+    """
     shared_at: Instant | None
     revoked_at: Instant | None
     first_viewed_at: Instant | None
@@ -1129,6 +1379,9 @@ class PublicReport:
     The calculation's snapshot, narrowed to what a recipient sees.
     """
     compared_to: PublicReportComparedTo | None
+    """
+    The client's abutting prior published period.
+    """
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -1282,8 +1535,22 @@ class Renewal:
     client_id: Uuid
     name: str
     renewal_date: Date
+    """
+    For a client with a `renewal_term`, the next renewal on or after the list's `today`. Otherwise the date as set, which may be before `today`.
+    """
+    renewal_term: RenewalTerm | str | None
+    """
+    How often the renewal recurs. `null` when the client has no term.
+    """
     roi: Ratio | None
     period: Period | None
+    """
+    The client's latest published period. `null` when it has none.
+    """
+    calculation_id: Uuid | None
+    """
+    The published calculation `roi` and `period` come from. `null` exactly when `period` is.
+    """
     health: RenewalHealth | None
     unavailable: HealthUnavailable | str | None
     prior_period: Month | None
@@ -1346,6 +1613,9 @@ class ImportRowError:
     The one-based line number in the file, counting the header.
     """
     column: str | None
+    """
+    The file's column the problem is in. `null` when the value came from a constant or the problem has no column.
+    """
     code: FieldErrorCode | str
     detail: str
 
@@ -1422,6 +1692,9 @@ class ImportPreview:
     How many columns the mapping does not bind beyond the 100 in `ignored_columns`. `0` when the list is complete.
     """
     timezone_warning: str | None
+    """
+    Set when the file has timestamps without an offset and the last import used a different timezone, so re-imported rows would not deduplicate. Human text.
+    """
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -1447,6 +1720,46 @@ class ImportResult:
     """
 
 
+@dataclass(frozen=True, kw_only=True)
+class ImportSummary:
+    """
+    One CSV import and its counts. `total_rows` is `accepted` plus `duplicates` plus `rejected`.
+    """
+
+    id: Uuid
+    filename: str
+    """
+    The file part's file name, without a directory part separated by `/`: a part named `exports/august.csv` is stored as `august.csv`. A backslash is not a separator, so `C:\\ops\\august.csv` is stored whole. `""` when the file part named none.
+    """
+    total_rows: int
+    """
+    The file's data rows, not counting the header.
+    """
+    accepted: int
+    """
+    The events this import wrote, counted when the import is read: the `import_batch_id` of each is the import's `id`.
+    """
+    duplicates: int
+    """
+    `total_rows` less `rejected` and `accepted`. At the commit, these are the valid rows that wrote no event: an event with the same `event_id`, or the same content hash, was already stored, or an earlier row of the same file had the same `event_id`. Identical rows of one file without an `event_id` are each written, so they are not counted here.
+    """
+    rejected: int
+    """
+    Rows refused, counted once each however many problems they had.
+    """
+    created_at: Instant
+
+
+class ImportDelimiter(StrEnum):
+    """
+    A CSV field delimiter, a comma, a semicolon or a tab.
+    """
+
+    COMMA = ","
+    SEMICOLON = ";"
+    TAB = "\t"
+
+
 class HealthStatus(StrEnum):
     OK = "ok"
 
@@ -1465,11 +1778,47 @@ class Health:
 
 
 @dataclass(frozen=True, kw_only=True)
+class ImportList:
+    """
+    The workspace's imports: newest first, then id.
+    """
+
+    page: int | None
+    """
+    The page requested, or `null` when the request did not send `page`.
+    """
+    total: int | None
+    """
+    Every import in the workspace, not only this page, or `null` when the request did not send `page`.
+    """
+    data: Sequence[ImportSummary]
+    """
+    One page of items, at most `limit`, in the documented order.
+    """
+    has_more: bool
+    """
+    Whether another page exists.
+    """
+    next_cursor: str | None
+    """
+    The opaque cursor for the next page. Clients must not parse it.
+    """
+
+
+@dataclass(frozen=True, kw_only=True)
 class ClientList:
     """
     Clients, ordered by name case-insensitively, then id.
     """
 
+    page: int | None
+    """
+    The page requested, or `null` when the request did not send `page`.
+    """
+    total: int | None
+    """
+    Every client matching the filters and search, not only this page, or `null` when the request did not send `page`.
+    """
     data: Sequence[Client]
     """
     One page of items, at most `limit`, in the documented order.
@@ -1479,6 +1828,9 @@ class ClientList:
     Whether another page exists.
     """
     next_cursor: str | None
+    """
+    The opaque cursor for the next page. Clients must not parse it.
+    """
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -1487,6 +1839,14 @@ class AgentList:
     Agents, ordered by name case-insensitively, then id. Includes agents ingest created.
     """
 
+    page: int | None
+    """
+    The page requested, or `null` when the request did not send `page`.
+    """
+    total: int | None
+    """
+    Every agent matching the filters and search, not only this page, or `null` when the request did not send `page`.
+    """
     data: Sequence[AgentListItem]
     """
     One page of items, at most `limit`, in the documented order.
@@ -1496,6 +1856,9 @@ class AgentList:
     Whether another page exists.
     """
     next_cursor: str | None
+    """
+    The opaque cursor for the next page. Clients must not parse it.
+    """
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -1504,6 +1867,14 @@ class ValueModelList:
     Value models: active first, then newest first, then id.
     """
 
+    page: int | None
+    """
+    The page requested, or `null` when the request did not send `page`.
+    """
+    total: int | None
+    """
+    Every value model matching the filters and search, not only this page, or `null` when the request did not send `page`.
+    """
     data: Sequence[ValueModelSummary]
     """
     One page of items, at most `limit`, in the documented order.
@@ -1513,6 +1884,9 @@ class ValueModelList:
     Whether another page exists.
     """
     next_cursor: str | None
+    """
+    The opaque cursor for the next page. Clients must not parse it.
+    """
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -1530,6 +1904,9 @@ class OutcomeTypeList:
     Whether another page exists.
     """
     next_cursor: str | None
+    """
+    The opaque cursor for the next page. Clients must not parse it.
+    """
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -1547,6 +1924,9 @@ class ValueTemplateList:
     Whether another page exists.
     """
     next_cursor: str | None
+    """
+    The opaque cursor for the next page. Clients must not parse it.
+    """
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -1555,6 +1935,14 @@ class CostLineItemList:
     Line items, newest first, then id.
     """
 
+    page: int | None
+    """
+    The page requested, or `null` when the request did not send `page`.
+    """
+    total: int | None
+    """
+    Every line item matching the filters and search, not only this page, or `null` when the request did not send `page`.
+    """
     data: Sequence[CostLineItem]
     """
     One page of items, at most `limit`, in the documented order.
@@ -1564,6 +1952,9 @@ class CostLineItemList:
     Whether another page exists.
     """
     next_cursor: str | None
+    """
+    The opaque cursor for the next page. Clients must not parse it.
+    """
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -1581,6 +1972,9 @@ class CalculationList:
     Whether another page exists.
     """
     next_cursor: str | None
+    """
+    The opaque cursor for the next page. Clients must not parse it.
+    """
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -1598,14 +1992,85 @@ class ReportList:
     Whether another page exists.
     """
     next_cursor: str | None
+    """
+    The opaque cursor for the next page. Clients must not parse it.
+    """
+
+
+@dataclass(frozen=True, kw_only=True)
+class WorkspaceCalculationList:
+    """
+    The workspace's calculations: latest period first, then newest first, then id.
+    """
+
+    page: int | None
+    """
+    The page requested, or `null` when the request did not send `page`.
+    """
+    total: int | None
+    """
+    Every calculation matching the filters, not only this page, or `null` when the request did not send `page`.
+    """
+    data: Sequence[CalculationSummary]
+    """
+    One page of items, at most `limit`, in the documented order.
+    """
+    has_more: bool
+    """
+    Whether another page exists.
+    """
+    next_cursor: str | None
+    """
+    The opaque cursor for the next page. Clients must not parse it.
+    """
+
+
+@dataclass(frozen=True, kw_only=True)
+class WorkspaceReportList:
+    """
+    The workspace's reports: newest first, then id.
+    """
+
+    page: int | None
+    """
+    The page requested, or `null` when the request did not send `page`.
+    """
+    total: int | None
+    """
+    Every report matching the filters, not only this page, or `null` when the request did not send `page`.
+    """
+    data: Sequence[ReportSummary]
+    """
+    One page of items, at most `limit`, in the documented order.
+    """
+    has_more: bool
+    """
+    Whether another page exists.
+    """
+    next_cursor: str | None
+    """
+    The opaque cursor for the next page. Clients must not parse it.
+    """
 
 
 @dataclass(frozen=True, kw_only=True)
 class RenewalList:
     """
-    Clients with a renewal date, by renewal date, then name, then id.
+    Active clients with a renewal date, by the renewal date shown, then by name case-insensitively, then by id.
     """
 
+    page: int | None
+    """
+    The page requested, or `null` when the request did not send `page`.
+    """
+    total: int | None
+    """
+    Every client matching `window` and `renewal_term`, not only this page, or `null` when the request did not send `page`.
+    """
+    today: Date
+    """
+    The date the renewal dates were rolled against and `window` measured from: the `today` sent, or the current UTC date.
+    """
     data: Sequence[Renewal]
     """
     One page of items, at most `limit`, in the documented order.
@@ -1615,6 +2080,99 @@ class RenewalList:
     Whether another page exists.
     """
     next_cursor: str | None
+    """
+    The opaque cursor for the next page. Clients must not parse it.
+    """
+
+
+@dataclass(frozen=True, kw_only=True)
+class Workspace:
+    """
+    The workspace a credential belongs to.
+    """
+
+    id: Uuid
+    name: str
+    """
+    Free text.
+    """
+    currency: Currency
+    minor_units: MinorUnits
+    created_at: Instant
+
+
+class OnboardingStep(StrEnum):
+    """
+    A guided-setup step, in its fixed order: `add_client`, `add_agent`, `price_outcomes`, `bring_in_data`, `create_draft_calculation`.
+    """
+
+    ADD_CLIENT = "add_client"
+    ADD_AGENT = "add_agent"
+    PRICE_OUTCOMES = "price_outcomes"
+    BRING_IN_DATA = "bring_in_data"
+    CREATE_DRAFT_CALCULATION = "create_draft_calculation"
+
+
+@dataclass(frozen=True, kw_only=True)
+class OnboardingStepProgress:
+    step: OnboardingStep | str
+    completed: bool
+    """
+    Whether the workspace's data completes the step: a client; an agent assigned to a client; a line item on an active value model; an event; a calculation in any state.
+    """
+    skipped_at: Instant | None
+    """
+    When the step was skipped, or `null` when it is not skipped.
+    """
+
+
+@dataclass(frozen=True, kw_only=True)
+class Onboarding:
+    """
+    The guided setup's progress.
+    """
+
+    steps: Sequence[OnboardingStepProgress]
+    """
+    Every step, in the fixed order of `OnboardingStep`.
+    """
+    current_step: OnboardingStep | str | None
+    """
+    The first step neither completed nor skipped: where the owner resumes. `null` once every step is completed or skipped.
+    """
+    has_published: bool
+    """
+    Whether any calculation in the workspace is published.
+    """
+
+
+@dataclass(frozen=True, kw_only=True)
+class EventSummary:
+    """
+    How many events a view of the workspace's events holds: in all, per day and per category.
+    """
+
+    as_of: Instant
+    """
+    The arrival limit the counts were read under, as on the list.
+    """
+    period: Period
+    client_id: Uuid | None
+    """
+    The `client_id` filter, or `null` when none was sent.
+    """
+    total: int
+    """
+    Every event the view holds, counted exactly. Under the same parameters it equals the list's `total` whenever the list's `total_capped` is `false`.
+    """
+    days: Sequence[EventDayCount]
+    """
+    One entry per 24 hours from `from`, ascending, zeros included. The last is shorter when the period is not a whole number of days. Empty when `from` equals `to`.
+    """
+    categories: Sequence[EventCategoryCount]
+    """
+    One entry per category, in the order `session`, `task`, `model`, `outcome`, `exception`, zeros included. With `category` sent, the others are `0`.
+    """
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -1624,3 +2182,61 @@ class ReportWithPreview(Report):
     """
 
     preview: PublicReport | None
+    """
+    Exactly what `GET /report` would return. `null` when the preview cannot be rendered.
+    """
+
+
+@dataclass(frozen=True, kw_only=True)
+class AppliedImportMapping:
+    """
+    The mapping an import ran with, with every member present: a member the import did not send holds the value it applied. It has the members of `ImportMapping`, so it can be sent as the next import's `mapping`. A value the server's current rules refuse is refused then as in any mapping.
+    """
+
+    columns: Mapping[str, str]
+    """
+    Canonical field name to the file's column name, as in `ImportMapping`. `{}` when the import bound none.
+    """
+    constants: Mapping[str, str]
+    """
+    Canonical field name to the value used for every row, as in `ImportMapping`. `{}` when the import had none.
+    """
+    timezone: str
+    """
+    The IANA zone applied to timestamps without an offset. `UTC` when the import named none.
+    """
+    delimiter: ImportDelimiter | str
+    """
+    The field delimiter. `,` when the import named none.
+    """
+
+
+@dataclass(frozen=True, kw_only=True)
+class Import:
+    """
+    One CSV import, its counts and the mapping it ran with.
+    """
+
+    id: Uuid
+    filename: str
+    """
+    The file part's file name, without a directory part separated by `/`: a part named `exports/august.csv` is stored as `august.csv`. A backslash is not a separator, so `C:\\ops\\august.csv` is stored whole. `""` when the file part named none.
+    """
+    total_rows: int
+    """
+    The file's data rows, not counting the header.
+    """
+    accepted: int
+    """
+    The events this import wrote, counted when the import is read: the `import_batch_id` of each is the import's `id`.
+    """
+    duplicates: int
+    """
+    `total_rows` less `rejected` and `accepted`. At the commit, these are the valid rows that wrote no event: an event with the same `event_id`, or the same content hash, was already stored, or an earlier row of the same file had the same `event_id`. Identical rows of one file without an `event_id` are each written, so they are not counted here.
+    """
+    rejected: int
+    """
+    Rows refused, counted once each however many problems they had.
+    """
+    created_at: Instant
+    mapping: AppliedImportMapping

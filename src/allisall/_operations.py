@@ -36,10 +36,15 @@ class Operation:
     """The request body it takes."""
     status: int
     """The status of its success response."""
+    repeatable: frozenset[str] = frozenset()
+    """The query parameters the document marks `x-repeatable`, by wire name: each takes a
+    `list` or `tuple`, written as one parameter per item."""
 
 
-def _get(path: str, *, list_kind: ListKind | None = None) -> Operation:
-    return Operation("GET", path, "KeyOrSession", "read", False, list_kind, "none", 200)
+def _get(
+    path: str, *, list_kind: ListKind | None = None, repeatable: frozenset[str] = frozenset()
+) -> Operation:
+    return Operation("GET", path, "KeyOrSession", "read", False, list_kind, "none", 200, repeatable)
 
 
 def _create(path: str, *, body: BodyKind = "json") -> Operation:
@@ -61,8 +66,13 @@ def _delete(path: str) -> Operation:
 OPERATIONS: Mapping[str, Operation] = {
     # Events
     "ingestEvents": Operation("POST", "/v1/events", "KeyOnly", "ingest", False, None, "json", 200),
+    "listEvents": _get("/v1/events", list_kind="keyset"),
+    "getEventSummary": _get("/v1/events/summary"),
+    "listEventArrivals": _get("/v1/events/arrivals", list_kind="keyset"),
     "listClientEvents": _get("/v1/clients/{id}/events", list_kind="offset"),
     # Imports
+    "listImports": _get("/v1/imports", list_kind="keyset"),
+    "getImport": _get("/v1/imports/{id}"),
     "previewImport": Operation(
         "POST", "/v1/imports/preview", "KeyOrSession", "ingest", False, None, "multipart", 200
     ),
@@ -108,11 +118,13 @@ OPERATIONS: Mapping[str, Operation] = {
     "getClientRoi": _get("/v1/clients/{id}/roi"),
     "getClientAnomalies": _get("/v1/clients/{id}/anomalies"),
     # Calculations
+    "listCalculations": _get("/v1/calculations", list_kind="keyset"),
     "createCalculation": _create("/v1/clients/{id}/calculations"),
     "listClientCalculations": _get("/v1/clients/{id}/calculations", list_kind="keyset"),
     "getCalculation": _get("/v1/calculations/{id}"),
     "deleteCalculation": _delete("/v1/calculations/{id}"),
     # Reports
+    "listReports": _get("/v1/reports", list_kind="keyset"),
     "createReport": _create("/v1/calculations/{id}/reports", body="none"),
     "listCalculationReports": _get("/v1/calculations/{id}/reports", list_kind="keyset"),
     "getReport": _get("/v1/reports/{id}"),
@@ -120,9 +132,16 @@ OPERATIONS: Mapping[str, Operation] = {
     "deleteReport": _delete("/v1/reports/{id}"),
     # Dashboard
     "getDashboard": _get("/v1/dashboard"),
-    "listRenewals": _get("/v1/dashboard/renewals", list_kind="offset"),
+    "listRenewals": _get(
+        "/v1/dashboard/renewals", list_kind="offset", repeatable=frozenset({"renewal_term"})
+    ),
     # Health
     "getHealth": Operation("GET", "/healthz", "Public", None, False, None, "none", 200),
+    # Workspace
+    "getWorkspace": _get("/v1/workspace"),
+    # Onboarding
+    "getOnboarding": _get("/v1/onboarding"),
+    "setOnboardingSkippedSteps": _put("/v1/onboarding/skipped-steps"),
 }
 
 

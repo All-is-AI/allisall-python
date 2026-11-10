@@ -26,6 +26,12 @@ An ISO 4217 alphabetic currency code, upper case.
 """
 
 
+SearchText: TypeAlias = str
+"""
+Text to search for: 1 to 200 characters, with no whitespace at either end.
+"""
+
+
 PeriodInput = TypedDict(
     "PeriodInput",
     {
@@ -59,9 +65,45 @@ An event category.
 """
 
 
+CalculationState: TypeAlias = Literal["draft", "validated", "published"]
+"""
+A calculation's position in its lifecycle: `draft` → `validated` → `published`; `validated` → `draft` on reopen. Publication is terminal.
+"""
+
+
+ReportState: TypeAlias = Literal["draft", "shared", "revoked"]
+"""
+A report's position in its lifecycle: `draft` until it is shared, `shared` while its link works, and `revoked` once the link is revoked. A state only moves forward.
+"""
+
+
+RenewalTerm: TypeAlias = Literal["monthly", "annual"]
+"""
+How often a client's renewal recurs: every month, or every year. Each renewal is the date as set plus whole terms, on the same day of the month, or on the month's last day when the month is shorter: a monthly renewal set on 31 January falls on 28 February, then 31 March.
+"""
+
+
+RenewalTermFilter: TypeAlias = Literal["monthly", "annual", "none"]
+"""
+A renewal term to list, or `none` for a client with no term.
+"""
+
+
+RenewalWindow: TypeAlias = Literal["overdue", "next_30_days", "next_90_days", "upcoming"]
+"""
+Which renewal dates to list, measured from `today`: `overdue`, before `today`; `next_30_days` and `next_90_days`, from `today` to 30 or 90 days after it, both ends included; `upcoming`, on or after `today`.
+"""
+
+
 CostTargetKind: TypeAlias = Literal["client", "agent"]
 """
 What a cost line item is charged to.
+"""
+
+
+EventSource: TypeAlias = Literal["api", "csv"]
+"""
+How an event arrived: `api` for `POST /v1/events`, `csv` for a CSV import.
 """
 
 
@@ -91,13 +133,26 @@ class ClientCreate(TypedDict):
     """
     status: ClientStatus
     client_key: NotRequired[str | None]
+    """
+    At most 200 characters, counted as sent. Not trimmed: a key with white space (the Unicode `White_Space` property) at either end, or white space only, is refused with `invalid_format`. Unique in the workspace ignoring case: a key another client holds in any case, such as `acme` beside `Acme`, is refused with `client_key_in_use`. Absent or `null` leaves it unset; `""` is refused with `invalid_format`.
+    """
     renewal_date: NotRequired[DateInput | None]
+    """
+    The renewal date. A date before the request's UTC date less one day is refused with `out_of_range`, so no time zone's today is refused. Absent or `null` leaves it unset; `""` is refused with `invalid_format`.
+    """
+    renewal_term: NotRequired[RenewalTerm | None]
+    """
+    How often the renewal recurs: an active client's renewal date then rolls forward by whole terms once it passes. Absent or `null` is no term, and the date stays as set. Any other value, `""` included, is refused with `invalid_value`.
+    """
     notes: NotRequired[str | None]
+    """
+    Free text, at most 2,000 characters. Absent or `null` stores `""`.
+    """
 
 
 class ClientPatch(TypedDict):
     """
-    A JSON Merge Patch (RFC 7396): an absent member is unchanged, `null` clears a member. The merged client is validated whole.
+    A JSON Merge Patch (RFC 7396): an absent member is unchanged, `null` clears a member. The merged client is validated whole. A client's renewal schedule starts at the date as set: each renewal is that date plus whole terms. A patch that keeps the date but changes `renewal_term`, or changes `status`, saves the date the client shows on the current UTC day as the new start of its schedule, so the date shown does not jump; this happens without the patch sending a date. A client that is not active stops rolling and keeps the date it showed. A date the schedule already shows cannot become the new start in one patch: to move a client renewing on the 31st to the 30th, send a later 30th.
     """
 
     name: NotRequired[str]
@@ -106,8 +161,21 @@ class ClientPatch(TypedDict):
     """
     status: NotRequired[ClientStatus]
     client_key: NotRequired[str | None]
+    """
+    `null` clears it, refused with `client_key_has_events` while events carry the key. `""` does not clear it: it is refused with `invalid_format`. At most 200 characters, counted as sent. Not trimmed: a key with white space (the Unicode `White_Space` property) at either end, or white space only, is refused with `invalid_format`. Unique in the workspace ignoring case: a key another client holds in any case is refused with `client_key_in_use`.
+    """
     renewal_date: NotRequired[DateInput | None]
+    """
+    A date on the client's renewal schedule, up to the one it shows on the next UTC day, leaves the schedule unchanged, so sending back the `renewal_date` a read returned keeps it. Any other date is a new renewal date, refused with `out_of_range` when before the request's UTC date less one day. `null` clears it and keeps the term; `""` is refused with `invalid_format`.
+    """
+    renewal_term: NotRequired[RenewalTerm | None]
+    """
+    How often the renewal recurs. `null` clears it, and the date then stays as set. Any other value, `""` included, is refused with `invalid_value`.
+    """
     notes: NotRequired[str | None]
+    """
+    Free text, at most 2,000 characters. `null` clears it to `""`.
+    """
 
 
 class ClientAgentsSet(TypedDict):
@@ -127,7 +195,13 @@ class AgentCreate(TypedDict):
     Free text, trimmed of white space (the Unicode `White_Space` property) at both ends. The trimmed name is stored. It holds 1 to 200 characters, counted in Unicode code points after trimming: blank after trimming is `required`, and longer than 200 characters after trimming is `too_long`. U+0000 is `invalid_format`, as in every request string. No JSON Schema keyword measures a length after trimming, so the schema states no `maxLength`; a `maxLength` of 200 would refuse a padded name the server accepts.
     """
     framework: NotRequired[str | None]
+    """
+    Free text, at most 100 characters.
+    """
     version: NotRequired[str | None]
+    """
+    Free text, at most 100 characters.
+    """
     status: AgentStatus
 
 
@@ -141,7 +215,13 @@ class AgentPatch(TypedDict):
     Free text, trimmed of white space (the Unicode `White_Space` property) at both ends. The trimmed name is stored. It holds 1 to 200 characters, counted in Unicode code points after trimming: blank after trimming is `required`, and longer than 200 characters after trimming is `too_long`. U+0000 is `invalid_format`, as in every request string. No JSON Schema keyword measures a length after trimming, so the schema states no `maxLength`; a `maxLength` of 200 would refuse a padded name the server accepts.
     """
     framework: NotRequired[str | None]
+    """
+    Free text, at most 100 characters. `null` clears it to `""`.
+    """
     version: NotRequired[str | None]
+    """
+    Free text, at most 100 characters. `null` clears it to `""`.
+    """
     status: NotRequired[AgentStatus]
 
 
@@ -155,12 +235,18 @@ class ValueModelCreate(TypedDict):
     Free text, trimmed of white space (the Unicode `White_Space` property) at both ends. The trimmed name is stored. It holds 1 to 200 characters, counted in Unicode code points after trimming: blank after trimming is `required`, and longer than 200 characters after trimming is `too_long`. U+0000 is `invalid_format`, as in every request string. No JSON Schema keyword measures a length after trimming, so the schema states no `maxLength`; a `maxLength` of 200 would refuse a padded name the server accepts.
     """
     template_id: NotRequired[str | None]
+    """
+    Create-only: start from this built-in template's line items. An unknown id is refused with `unknown_reference`. Absent or `null` means no template; `""` is refused with `invalid_format`.
+    """
     copy_from_model_id: NotRequired[UuidInput | None]
+    """
+    Create-only: start from a copy of this model's line items. An id naming no model in the workspace is refused with `unknown_reference`. Absent or `null` means no source; `""` is refused with `invalid_format`.
+    """
 
 
 class ValueModelPatch(TypedDict):
     """
-    A JSON Merge Patch (RFC 7396) of the client's active model. Setting `status` to `archived` frees the client for a new active model.
+    A JSON Merge Patch (RFC 7396) of the client's active model. Setting `status` to `archived` sets `archived_at` and frees the client for a new active model.
     """
 
     name: NotRequired[str]
@@ -184,6 +270,9 @@ class ValueLineItemInput(TypedDict):
     At least 0 and below 100,000,000, with at most 4 decimal places; more is refused with `too_precise`, never rounded. Absent means 0, because templates ship every unit value as 0 on purpose.
     """
     provenance_note: NotRequired[str | None]
+    """
+    Free text, at most 1,000 characters.
+    """
 
 
 class ValueLineItemsSet(TypedDict):
@@ -221,6 +310,9 @@ class CostLineItemCreate(TypedDict):
     """
     start_date: DateInput
     end_date: NotRequired[DateInput | None]
+    """
+    Inclusive; not before `start_date`. Absent or `null` makes the charge open-ended; `""` is refused with `invalid_format`.
+    """
 
 
 class CostLineItemPatch(TypedDict):
@@ -239,6 +331,9 @@ class CostLineItemPatch(TypedDict):
     """
     start_date: NotRequired[DateInput]
     end_date: NotRequired[DateInput | None]
+    """
+    Inclusive; not before `start_date`. `null` makes the charge open-ended; `""` is refused with `invalid_format`.
+    """
 
 
 class ModelRateInput(TypedDict):
@@ -281,6 +376,9 @@ class DisclosureEdit(TypedDict):
     """
     included: bool
     text: NotRequired[str | None]
+    """
+    At most 500 characters. `null` restores the default sentence.
+    """
 
 
 class ReportPatch(TypedDict):
@@ -288,15 +386,18 @@ class ReportPatch(TypedDict):
     A JSON Merge Patch (RFC 7396). An array replaces the stored array whole. A shared report is refused with `report_shared`.
     """
 
-    client_name: NotRequired[str]
+    letterhead_client_name: NotRequired[str]
     """
     Free text, 1 to 200 characters counted in Unicode code points, padding included. Not trimmed: the value is stored as sent. Blank after trimming white space is `required`, and longer than 200 characters is `too_long`.
     """
-    workspace_name: NotRequired[str]
+    letterhead_workspace_name: NotRequired[str]
     """
     Free text, 1 to 200 characters counted in Unicode code points, padding included. Not trimmed: the value is stored as sent. Blank after trimming white space is `required`, and longer than 200 characters is `too_long`.
     """
     note: NotRequired[str | None]
+    """
+    Free text, at most 2,000 characters. `null` clears it to `""`.
+    """
     disclosures: NotRequired[list[DisclosureEdit]]
     """
     Replaces the editorial state of every finding. It must name each stored finding exactly once: a missing one is `required`, an unknown one `invalid_value`, a repeated one `duplicate`. At most 50: a longer array is refused at its 51st element with one `too_many` at `/disclosures`.
@@ -309,6 +410,9 @@ class EventInput(TypedDict):
     """
 
     event_id: NotRequired[str | None]
+    """
+    An optional sender-chosen id. A repeat within the workspace is a duplicate. The SDKs generate one per event. At most 200 characters, counted as sent; more is refused with `too_long`.
+    """
     timestamp: InstantInput
     """
     When the event happened. At most 24 hours in the future.
@@ -318,19 +422,46 @@ class EventInput(TypedDict):
     The agent that acted. An agent not seen before is created. 1 to 200 characters, counted as sent; more is refused with `too_long`.
     """
     client_key: NotRequired[str | None]
+    """
+    The client the event belongs to. Required on a `model` or `outcome` event whose agent is assigned to two or more clients; without it the row is refused with `client_key_required`. A key of white space only counts as no key. At most 200 characters, counted as sent; more is refused with `too_long`.
+    """
     category: EventCategory
     event_type: str
     """
     What the agent did. 1 to 200 characters, counted as sent; more is refused with `too_long`.
     """
     outcome_type: NotRequired[str | None]
+    """
+    Required when `category` is `outcome`. At most 200 characters, counted as sent; more is refused with `too_long`, whatever the `category`.
+    """
     quantity: NotRequired[float | None]
+    """
+    Absent, `null` or `0` means 1. Its magnitude is below 10,000,000,000.
+    """
     cost: NotRequired[MoneyInput | None]
+    """
+    In `currency`, or the workspace currency. Its magnitude is below 100,000,000, with at most 6 decimal places; more is refused with `too_precise`. May be negative: a vendor credit.
+    """
     tokens_in: NotRequired[int | None]
+    """
+    A negative count is refused with `out_of_range`.
+    """
     tokens_out: NotRequired[int | None]
+    """
+    A negative count is refused with `out_of_range`.
+    """
     model: NotRequired[str | None]
+    """
+    The model the agent invoked. The price table is keyed by it. At most 200 characters, counted as sent; more is refused with `too_long`.
+    """
     currency: NotRequired[Currency | None]
+    """
+    The currency of `cost`. Absent means the workspace currency. A different currency is refused with `currency_mismatch`, never converted.
+    """
     metadata: NotRequired[dict[str, Any] | None]
+    """
+    Free-form. Any members, at most 8 KB serialised; more is refused with `too_large`. A repeated member name is refused with `duplicate`.
+    """
 
 
 class EventBatch(TypedDict):
@@ -407,5 +538,20 @@ class ImportUpload(TypedDict):
     mapping: ImportMapping
     file: str
     """
-    The CSV file, with a header row. At most 250,000 data rows. Each header name is at most 256 bytes of UTF-8; a longer one is refused with `too_long` on `part` `file`, located by its position in the `detail` and carrying no `column`, before any repeated-name or missing-column check. A header name that is not valid UTF-8 is accepted, but the mapping cannot bind it, and the response writes each such byte as U+FFFD wherever it names the column. The part's file name is stored with the import, so one that is not valid UTF-8 is refused with `invalid_format` on `part` `file`, as one holding U+0000 is.
+    The CSV file, with a header row. At most 250,000 data rows. Each header name is at most 256 bytes of UTF-8; a longer one is refused with `too_long` on `part` `file`, located by its position in the `detail` and carrying no `column`, before any repeated-name or missing-column check. A header name that is not valid UTF-8 is accepted, but the mapping cannot bind it, and the response writes each such byte as U+FFFD wherever it names the column. The part's file name is stored with the import, so one that is not valid UTF-8 is refused with `invalid_format` on `part` `file`, as one holding U+0000 is. A file name of more than 255 characters, counted as Unicode code points after a directory part separated by `/` is dropped, is refused with `too_long` on `part` `file`. A backslash is not a separator: `C:\\ops\\august.csv` is counted and stored whole.
+    """
+
+
+OnboardingStep: TypeAlias = Literal[
+    "add_client", "add_agent", "price_outcomes", "bring_in_data", "create_draft_calculation"
+]
+"""
+A guided-setup step, in its fixed order: `add_client`, `add_agent`, `price_outcomes`, `bring_in_data`, `create_draft_calculation`.
+"""
+
+
+class OnboardingSkippedStepsSet(TypedDict):
+    steps: list[OnboardingStep]
+    """
+    The steps to mark skipped, at most five. A repeated step is refused with `duplicate`, an unknown one with `invalid_value`. `[]` clears every skip.
     """

@@ -10,7 +10,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import TypeVar
 from urllib.parse import quote
 
@@ -123,18 +123,36 @@ def fill_path(template: str, values: Sequence[tuple[str, object]]) -> str:
     return _PATH_PARAMETER.sub(segment, template)
 
 
-def query_of(params: Mapping[str, object]) -> list[tuple[str, str]]:
+def query_of(
+    params: Mapping[str, object], repeatable: frozenset[str] = frozenset()
+) -> list[tuple[str, str]]:
     """The query, from keyword arguments in the method's order, by their wire names.
 
-    A value of `None` is not sent. A `str` is sent as it is, an `int` as its decimal text, and
-    an aware `datetime` with `isoformat()`. Raises `ValueError` naming the parameter for any
-    other value, a naive `datetime`, a `bool`, a `list` and a `dict` among them.
+    A value of `None` is not sent. A `str` is sent as it is, an `int` as its decimal text, an
+    aware `datetime` with `isoformat()`, and a `date` as `YYYY-MM-DD`. At a parameter in
+    `repeatable`, a `list` or `tuple` is sent as one parameter per item, in order. Raises
+    `ValueError` naming the parameter for any other value: a naive `datetime`, a `bool` and a
+    `dict` among them, a `list` at any other parameter, and at a repeatable one an empty
+    sequence or anything that is not a `list` or `tuple`, a single `str` and a `set` included.
     """
     query: list[tuple[str, str]] = []
     for name, value in params.items():
         if value is None:
             continue
-        query.append((QUERY_WIRE_NAMES.get(name, name), _query_text(name, value)))
+        wire = QUERY_WIRE_NAMES.get(name, name)
+        if wire in repeatable:
+            # Only a list or tuple: a str is itself a sequence and would be written one
+            # character at a time, and a set has no order.
+            if not isinstance(value, list | tuple):
+                raise ValueError(
+                    f"{name} is a {type(value).__name__}; pass a list or tuple of values"
+                )
+            if not value:
+                # Leaving the parameter out means every value, the opposite of none.
+                raise ValueError(f"{name} is empty; leave it out to match every value")
+            query.extend((wire, _query_text(name, item)) for item in value)
+            continue
+        query.append((wire, _query_text(name, value)))
     return query
 
 
@@ -149,7 +167,11 @@ def _query_text(name: str, value: object) -> str:
         return str(value)
     if isinstance(value, datetime):
         return aware_isoformat(value, name)
-    raise ValueError(f"{name} is a {type(value).__name__}; pass a str, an int or a datetime")
+    if isinstance(value, date):
+        return value.isoformat()
+    raise ValueError(
+        f"{name} is a {type(value).__name__}; pass a str, an int, a datetime or a date"
+    )
 
 
 def prepare(
@@ -172,7 +194,11 @@ def prepare(
     if options.idempotency_key is not None and not operation.idempotent:
         raise TypeError(f"{operation_id} takes no idempotency key")
     key = check_idempotency_key(options.idempotency_key)
-    url = join_url(config.base_url, fill_path(operation.path, path), query_of(query or {}))
+    url = join_url(
+        config.base_url,
+        fill_path(operation.path, path),
+        query_of(query or {}, operation.repeatable),
+    )
     content, content_type, upload = _encode(operation_id, operation, body)
     return Call(
         method=operation.method,

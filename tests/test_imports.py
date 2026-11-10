@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import re
@@ -204,3 +205,70 @@ def test_the_exported_upload_is_the_sdk_s_own() -> None:
     assert allisall.ImportUpload is not generated_requests.ImportUpload
     assert allisall.ImportUpload.__required_keys__ == {"mapping", "file"}
     assert allisall.ImportUpload.__optional_keys__ == {"filename"}
+
+
+# --- Sending a read mapping back ---
+
+APPLIED: dict[str, Any] = {
+    "columns": {"timestamp": "Time", "agent_key": "Agent"},
+    "constants": {"category": "task"},
+    "timezone": "Asia/Tokyo",
+    "delimiter": ";",
+}
+IMPORT: dict[str, Any] = {
+    "id": "import-1",
+    "filename": "august.csv",
+    "total_rows": 3,
+    "accepted": 2,
+    "duplicates": 1,
+    "rejected": 0,
+    "created_at": "2026-09-01T00:00:00Z",
+    "mapping": APPLIED,
+}
+
+
+def get_import(harness: Harness) -> allisall.Import:
+    client = harness.client
+    if isinstance(client, allisall.Allisall):
+        return client.imports.get("import-1")
+    return asyncio.run(client.imports.get("import-1"))
+
+
+def test_a_read_mapping_is_sent_back_as_the_next_commit_s_mapping(
+    make: Callable[..., Harness],
+) -> None:
+    answers = iter([json_response(IMPORT), json_response(sample(ImportResult))])
+    harness = make(lambda request: next(answers))
+    read = get_import(harness)
+    assert read.mapping.delimiter is allisall.ImportDelimiter.SEMICOLON
+    mapping = allisall.to_import_mapping(read.mapping)
+    commit(harness, {"mapping": mapping, "file": b"Time;Agent\n"})
+
+    sent = parts(harness.requests[1])[0]
+    assert sent[:3] == ("mapping", "mapping.json", "application/json")
+    assert json.loads(sent[3]) == APPLIED
+    # A copy: changing the result leaves the read mapping as it was.
+    mapping["columns"] = {}
+    assert dict(read.mapping.columns) == APPLIED["columns"]
+
+
+def test_a_delimiter_the_sdk_does_not_list_is_kept_and_sent_back(
+    make: Callable[..., Harness],
+) -> None:
+    unlisted = {**IMPORT, "mapping": {**APPLIED, "delimiter": "|"}}
+    harness = make(lambda request: json_response(unlisted))
+    read = get_import(harness)
+    assert read.mapping.delimiter == "|"
+    assert type(read.mapping.delimiter) is str
+    assert allisall.to_import_mapping(read.mapping) == {**APPLIED, "delimiter": "|"}
+
+
+def test_each_listed_delimiter_is_sent_back_as_its_text() -> None:
+    for member in allisall.ImportDelimiter:
+        applied = allisall.AppliedImportMapping(
+            columns={}, constants={}, timezone="UTC", delimiter=member
+        )
+        sent = allisall.to_import_mapping(applied)
+        assert sent["delimiter"] == member.value
+        assert type(sent["delimiter"]) is str
+    assert [m.name for m in allisall.ImportDelimiter] == ["COMMA", "SEMICOLON", "TAB"]

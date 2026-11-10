@@ -341,7 +341,7 @@ class SyncTransport:
                 return Page(body, None)
             return Page(body, lambda next_options: load(following, next_options))
 
-        return load(Step.start(query or {}), None)
+        return load(Step.start(query or {}, operation_id), None)
 
 
 class AsyncTransport:
@@ -459,5 +459,5 @@ class AsyncTransport:
                 return AsyncPage(body, None)
             return AsyncPage(body, lambda next_options: load(following, next_options))
 
-        first = Step.start(query or {})
+        first = Step.start(query or {}, operation_id)
         return AsyncPaginator(lambda: load(first, None))

@@ -80,12 +80,18 @@ class ErrorCode(StrEnum):
     REPORT_SHARED = "report_shared"
     REPORT_NOT_SHARED = "report_not_shared"
     API_KEY_REVOKED = "api_key_revoked"
+    INVITE_EXPIRED = "invite_expired"
+    INVITE_USED = "invite_used"
+    INVITE_REVOKED = "invite_revoked"
+    INVITE_EMAIL_MISMATCH = "invite_email_mismatch"
+    EMAIL_HAS_WORKSPACE = "email_has_workspace"
     PAYLOAD_TOO_LARGE = "payload_too_large"
     URI_TOO_LONG = "uri_too_long"
     UNSUPPORTED_MEDIA_TYPE = "unsupported_media_type"
     IDEMPOTENCY_KEY_REUSED = "idempotency_key_reused"
     RATE_LIMITED = "rate_limited"
     INTERNAL_ERROR = "internal_error"
+    UPSTREAM_FAILED = "upstream_failed"
 
 
 class FieldErrorCode(StrEnum):

@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from .._generated.requests import ValueLineItemsSet, ValueModelCreate, ValueModelPatch
+from .._generated.requests import (
+    ValueLineItemsSet,
+    ValueModelCreate,
+    ValueModelPatch,
+    ValueModelStatus,
+)
 from .._generated.responses import (
     ValueModel,
     ValueModelList,
@@ -30,8 +35,12 @@ class ValueModelsResource:
     def list(
         self,
         *,
+        q: str | None = None,
+        status: ValueModelStatus | None = None,
+        client_id: str | None = None,
         limit: int | None = None,
         cursor: str | None = None,
+        page: int | None = None,
         timeout: float | None = None,
         max_retries: int | None = None,
         headers: Mapping[str, str] | None = None,
@@ -41,13 +50,27 @@ class ValueModelsResource:
         Returns the first page; iterating it yields every value model of every page from
         there.
 
+        `q` searches the value model's own name. Pass `page` or `cursor`, not both. Pass `page`
+        for a numbered page: the page's `body` then holds `page` and `total`. Only that first
+        page is counted; every later page of a walk continues by cursor from it, and its `page`
+        and `total` are `None`. To show another numbered page, call this method again with its
+        `page` rather than `get_next_page()`. A `page` past the end has no items, and the walk
+        ends there.
+
         Needs the `read` scope. Operation `listValueModels`.
         """
         return self._transport.call_page(
             "listValueModels",
             ValueModelList,
             ValueModelSummary,
-            query={"limit": limit, "cursor": cursor},
+            query={
+                "q": q,
+                "status": status,
+                "client_id": client_id,
+                "limit": limit,
+                "cursor": cursor,
+                "page": page,
+            },
             options=CallOptions(timeout=timeout, max_retries=max_retries, headers=headers),
         )
 
@@ -235,8 +258,12 @@ class AsyncValueModelsResource:
     def list(
         self,
         *,
+        q: str | None = None,
+        status: ValueModelStatus | None = None,
+        client_id: str | None = None,
         limit: int | None = None,
         cursor: str | None = None,
+        page: int | None = None,
         timeout: float | None = None,
         max_retries: int | None = None,
         headers: Mapping[str, str] | None = None,
@@ -246,13 +273,27 @@ class AsyncValueModelsResource:
         Await the result for the first page, or iterate it with `async for` for every value
         model of every page. Nothing is sent until it is awaited or iterated.
 
+        `q` searches the value model's own name. Pass `page` or `cursor`, not both. Pass `page`
+        for a numbered page: the page's `body` then holds `page` and `total`. Only that first
+        page is counted; every later page of a walk continues by cursor from it, and its `page`
+        and `total` are `None`. To show another numbered page, call this method again with its
+        `page` rather than `get_next_page()`. A `page` past the end has no items, and the walk
+        ends there.
+
         Needs the `read` scope. Operation `listValueModels`.
         """
         return self._transport.call_page(
             "listValueModels",
             ValueModelList,
             ValueModelSummary,
-            query={"limit": limit, "cursor": cursor},
+            query={
+                "q": q,
+                "status": status,
+                "client_id": client_id,
+                "limit": limit,
+                "cursor": cursor,
+                "page": page,
+            },
             options=CallOptions(timeout=timeout, max_retries=max_retries, headers=headers),
         )
 

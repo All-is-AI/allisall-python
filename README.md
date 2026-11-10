@@ -82,6 +82,8 @@ method's documentation names the API operation it calls and the scope your
 key needs.
 
 ```python
+from datetime import UTC, date, datetime
+
 from allisall import Allisall
 
 with Allisall() as client:
@@ -90,8 +92,14 @@ with Allisall() as client:
     )
 
     # An update is a merge patch: a key you leave out keeps its value, and
-    # None clears it.
-    updated = client.clients.update(created.id, {"renewal_date": "2026-12-31"})
+    # None clears it. This sets the renewal date to one calendar year after
+    # today's UTC date; a date before yesterday in UTC is refused.
+    today = datetime.now(UTC).date()
+    try:
+        renewal_date = today.replace(year=today.year + 1).isoformat()
+    except ValueError:  # 29 February, in a year without one: 1 March.
+        renewal_date = date(today.year + 1, 3, 1).isoformat()
+    updated = client.clients.update(created.id, {"renewal_date": renewal_date})
     print(updated.name, updated.renewal_date)
 ```
 

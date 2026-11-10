@@ -22,9 +22,11 @@ from ._resources.dashboard import AsyncDashboardResource, DashboardResource
 from ._resources.events import AsyncEventsResource, EventsResource
 from ._resources.health import AsyncHealthResource, HealthResource
 from ._resources.imports import AsyncImportsResource, ImportsResource
+from ._resources.onboarding import AsyncOnboardingResource, OnboardingResource
 from ._resources.outcome_types import AsyncOutcomeTypesResource, OutcomeTypesResource
 from ._resources.reports import AsyncReportsResource, ReportsResource
 from ._resources.value_models import AsyncValueModelsResource, ValueModelsResource
+from ._resources.workspace import AsyncWorkspaceResource, WorkspaceResource
 from ._transport import (
     CREDENTIAL_CHARACTERS,
     AsyncTransport,
@@ -139,6 +141,10 @@ class Allisall:
     reports: ReportsResource
     dashboard: DashboardResource
     health: HealthResource
+    workspace: WorkspaceResource
+    """The workspace the credential belongs to."""
+    onboarding: OnboardingResource
+    """The guided setup's progress, and the steps skipped in it."""
 
     def __init__(
         self,
@@ -172,6 +178,8 @@ class Allisall:
         self.reports = ReportsResource(transport)
         self.dashboard = DashboardResource(transport)
         self.health = HealthResource(transport)
+        self.workspace = WorkspaceResource(transport)
+        self.onboarding = OnboardingResource(transport)
 
     def close(self) -> None:
         """Close the HTTP connections the client opened. A caller's `http_client` stays open."""
@@ -217,6 +225,10 @@ class AsyncAllisall:
     reports: AsyncReportsResource
     dashboard: AsyncDashboardResource
     health: AsyncHealthResource
+    workspace: AsyncWorkspaceResource
+    """The workspace the credential belongs to."""
+    onboarding: AsyncOnboardingResource
+    """The guided setup's progress, and the steps skipped in it."""
 
     def __init__(
         self,
@@ -250,6 +262,8 @@ class AsyncAllisall:
         self.reports = AsyncReportsResource(transport)
         self.dashboard = AsyncDashboardResource(transport)
         self.health = AsyncHealthResource(transport)
+        self.workspace = AsyncWorkspaceResource(transport)
+        self.onboarding = AsyncOnboardingResource(transport)
 
     async def close(self) -> None:
         """Close the HTTP connections the client opened. A caller's `http_client` stays open."""

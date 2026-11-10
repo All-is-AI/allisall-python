@@ -1,9 +1,10 @@
 """Holds the hand-written operation table to the OpenAPI document.
 
 The operations the SDK calls are read from the document independently of the table: every
-operation that is not a `HEAD`, less the problem-type page, the session-only operations and
-the shared report. Each entry's method, path, access policy and scope, idempotency, list kind,
-body kind and success status must equal the document's. A copy of the document with one fact
+operation that is not a `HEAD`, less the problem-type page and every operation under a policy
+the SDK does not call. An operation under a policy in neither list is refused. Each entry's
+method, path, access policy and scope, idempotency, list kind, body kind and success status
+must equal the document's. A copy of the document with one fact
 changed shows the comparison able to fail.
 """
 
@@ -15,6 +16,7 @@ from typing import Any
 import pytest
 
 from allisall._operations import OPERATIONS, BodyKind, Method, Operation, is_eligible
+from test_generated import script
 from test_spec import load_spec
 
 METHODS: dict[str, Method] = {
@@ -24,7 +26,12 @@ METHODS: dict[str, Method] = {
     "delete": "DELETE",
     "patch": "PATCH",
 }
-NOT_CALLED_POLICIES = {"SessionOnly", "ShareToken"}
+CALLED_POLICIES = {"KeyOnly", "KeyOrSession", "Public"}
+NOT_CALLED_POLICIES = {"SessionOnly", "ShareToken", "InviteToken", "InviteeSession"}
+
+
+class UnknownPolicyError(Exception):
+    """An operation's access policy is in neither `CALLED_POLICIES` nor `NOT_CALLED_POLICIES`."""
 
 
 def body_kind(operation: dict[str, Any]) -> BodyKind:
@@ -40,6 +47,17 @@ def body_kind(operation: dict[str, Any]) -> BodyKind:
     return "json"
 
 
+def resolve_ref(document: dict[str, Any], node: dict[str, Any]) -> dict[str, Any]:
+    """Any node of the document, such as a parameter, a response or a schema, through its `$ref`
+    when it has one, and through each `$ref` it then reaches."""
+    while "$ref" in node:
+        target: Any = document
+        for part in node["$ref"].removeprefix("#/").split("/"):
+            target = target[part]
+        node = target
+    return node
+
+
 def spec_operations(document: dict[str, Any]) -> dict[str, Operation]:
     """The operations the SDK calls, as the document states them."""
     found: dict[str, Operation] = {}
@@ -53,6 +71,10 @@ def spec_operations(document: dict[str, Any]) -> dict[str, Operation]:
                 "getProblemType"
             ):
                 continue
+            if access["policy"] not in CALLED_POLICIES:
+                raise UnknownPolicyError(
+                    f"{operation['operationId']} has the x-access policy {access['policy']}"
+                )
             successes = [int(code) for code in operation["responses"] if str(code)[0] == "2"]
             assert len(successes) == 1, operation["operationId"]
             found[operation["operationId"]] = Operation(
@@ -64,6 +86,13 @@ def spec_operations(document: dict[str, Any]) -> dict[str, Operation]:
                 list_kind=operation.get("x-list"),
                 body=body_kind(operation),
                 status=successes[0],
+                repeatable=frozenset(
+                    parameter["name"]
+                    for parameter in (
+                        resolve_ref(document, p) for p in operation.get("parameters", [])
+                    )
+                    if parameter["in"] == "query" and parameter.get("x-repeatable") is True
+                ),
             )
     return found
 
@@ -83,9 +112,43 @@ def differences(document: dict[str, Any]) -> list[str]:
 
 def test_the_table_equals_the_document() -> None:
     document = load_spec()
-    assert len(spec_operations(document)) == 48
-    assert len(OPERATIONS) == 48
+    assert len(spec_operations(document)) == 58
+    assert len(OPERATIONS) == 58
     assert differences(document) == []
+    assert {"getWorkspace", "getOnboarding", "setOnboardingSkippedSteps"} <= OPERATIONS.keys()
+    assert {"listCalculations", "listReports", "listImports", "getImport"} <= OPERATIONS.keys()
+    assert {"listEvents", "getEventSummary", "listEventArrivals"} <= OPERATIONS.keys()
+    # The invite's redemption and the invitee's workspace creation are left out by policy.
+    assert "redeemInvite" not in OPERATIONS
+    assert "createWorkspace" not in OPERATIONS
+    assert "getInvite" not in OPERATIONS
+
+
+def _with_unknown_policy() -> dict[str, Any]:
+    """A copy of the document with one operation under a policy no list names."""
+    document = copy.deepcopy(load_spec())
+    widgets = copy.deepcopy(document["paths"]["/v1/agents"]["get"])
+    widgets.update({"operationId": "listWidgets", "x-access": {"policy": "PartnerToken"}})
+    document["paths"]["/v1/widgets"] = {"get": widgets}
+    return document
+
+
+def test_an_operation_under_an_unknown_policy_is_refused() -> None:
+    # Neither taken in nor skipped: a new policy is decided before the SDK calls or drops it.
+    with pytest.raises(
+        UnknownPolicyError, match="listWidgets has the x-access policy PartnerToken"
+    ):
+        spec_operations(_with_unknown_policy())
+
+
+def test_the_generator_refuses_an_operation_under_an_unknown_policy() -> None:
+    generate = script()
+    assert generate.CALLED_POLICIES == CALLED_POLICIES
+    assert generate.EXCLUDED_POLICIES == NOT_CALLED_POLICIES
+    with pytest.raises(ValueError, match="listWidgets has the x-access policy PartnerToken"):
+        list(generate.operations(_with_unknown_policy()))
+    called = {op["operationId"] for op in generate.operations(load_spec())}
+    assert called == OPERATIONS.keys()
 
 
 @pytest.mark.parametrize(
@@ -132,7 +195,46 @@ INELIGIBLE = {
 
 
 def test_the_eligible_operations() -> None:
-    assert len(OPERATIONS) == 48
+    assert len(OPERATIONS) == 58
     assert {name for name, op in OPERATIONS.items() if not is_eligible(name, op)} == INELIGIBLE
     assert len(INELIGIBLE) == 7
-    assert sum(is_eligible(name, op) for name, op in OPERATIONS.items()) == 41
+    assert sum(is_eligible(name, op) for name, op in OPERATIONS.items()) == 51
+    for name in (
+        "getWorkspace",
+        "getOnboarding",
+        "setOnboardingSkippedSteps",
+        "listCalculations",
+        "listReports",
+        "listImports",
+        "getImport",
+        "listEvents",
+        "getEventSummary",
+        "listEventArrivals",
+    ):
+        assert is_eligible(name, OPERATIONS[name]), name
+
+
+def test_only_the_renewals_list_has_a_repeatable_parameter() -> None:
+    # The table equals the document, repeatable names included; this pins today's one.
+    assert {name: op.repeatable for name, op in OPERATIONS.items() if op.repeatable} == {
+        "listRenewals": frozenset({"renewal_term"})
+    }
+
+
+def test_a_pinned_member_is_both_a_query_parameter_and_a_member_of_the_list_s_body() -> None:
+    from allisall._pagination import PINNED_ECHO
+
+    document = load_spec()
+    assert dict(PINNED_ECHO) == {"listRenewals": "today"}
+    for operation_id, name in PINNED_ECHO.items():
+        (operation,) = [
+            op
+            for item in document["paths"].values()
+            for op in item.values()
+            if isinstance(op, dict) and op.get("operationId") == operation_id
+        ]
+        parameters = [resolve_ref(document, p) for p in operation["parameters"]]
+        assert any(p["in"] == "query" and p["name"] == name for p in parameters), operation_id
+        content = resolve_ref(document, operation["responses"]["200"])["content"]
+        body = resolve_ref(document, content["application/json"]["schema"])
+        assert name in body["required"], operation_id

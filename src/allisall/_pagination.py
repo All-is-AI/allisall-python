@@ -53,9 +53,20 @@ BodyT = TypeVar("BodyT", bound=ListBody[object])
 _LAST_PAGE = "this is the last page; no page follows it"
 
 
-def next_query(query: Mapping[str, object], cursor: str) -> dict[str, object]:
-    """The query of the next page: the same members, `page` dropped, `cursor` set."""
+PINNED_ECHO: Mapping[str, str] = {"listRenewals": "today"}
+"""The query member a walk pins to its first page's answer, by operation: when the caller
+leaves it out, every later page sends the value the first page's body echoed. On the renewals
+list it is `today`, so a walk that crosses UTC midnight reads every page under one date."""
+
+
+def next_query(
+    query: Mapping[str, object], cursor: str, pinned: tuple[str, object] | None = None
+) -> dict[str, object]:
+    """The query of the next page: the same members, `page` dropped, `cursor` set, and the
+    pinned member, when the caller left it out, set to the value the first page echoed."""
     following = {name: value for name, value in query.items() if name != "page"}
+    if pinned is not None and following.get(pinned[0]) is None:
+        following[pinned[0]] = pinned[1]
     following["cursor"] = cursor
     return following
 
@@ -85,15 +96,18 @@ class Step:
     query: Mapping[str, object]
     position: int
     positions: dict[str, int]
+    pinned: str | None = None
+    """The member this walk pins to its first page's answer; see `PINNED_ECHO`."""
 
     @classmethod
-    def start(cls, query: Mapping[str, object]) -> Step:
+    def start(cls, query: Mapping[str, object], operation_id: str | None = None) -> Step:
         """The list call's own request. A cursor the caller passes is recorded at position 0."""
         positions: dict[str, int] = {}
         cursor = query.get("cursor")
         if isinstance(cursor, str):
             positions[cursor] = 0
-        return cls(query, 0, positions)
+        pinned = None if operation_id is None else PINNED_ECHO.get(operation_id)
+        return cls(query, 0, positions, pinned)
 
     def check(self, body: ListBody[object]) -> None:
         """Refuse a page that repeats the walk; see `check_cursor`."""
@@ -106,7 +120,16 @@ class Step:
         if cursor is None:
             return None
         self.positions.setdefault(cursor, self.position + 1)
-        return Step(next_query(self.query, cursor), self.position + 1, self.positions)
+        echoed = None if self.pinned is None else getattr(body, self.pinned, None)
+        # An empty or non-string echo is not pinned: the API refuses an empty parameter.
+        pinned = (
+            (self.pinned, echoed)
+            if self.pinned is not None and isinstance(echoed, str) and echoed != ""
+            else None
+        )
+        return Step(
+            next_query(self.query, cursor, pinned), self.position + 1, self.positions, self.pinned
+        )
 
 
 def next_cursor_of(body: ListBody[object]) -> str | None:

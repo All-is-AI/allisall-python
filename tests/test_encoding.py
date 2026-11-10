@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+import asyncio
 import math
 from collections.abc import Callable
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
 import pytest
 
-from support import Harness, event
+from support import Harness, event, json_response
 
 
 def sent_text(harness: Harness, **members: Any) -> str:
@@ -123,3 +124,73 @@ def test_the_body_is_compact_json(make: Callable[..., Harness]) -> None:
     assert b", " not in body
     assert b": " not in body
     assert body.endswith(b'"event_id":"b"}]}')
+
+
+# --- A repeatable query parameter, and a date ---
+
+
+def list_renewals(harness: Harness, **keywords: Any) -> None:
+    """`dashboard.list_renewals` with `keywords`, run to its first page on either client."""
+    call = harness.client.dashboard.list_renewals
+    if harness.mode == "sync":
+        call(**keywords)
+        return
+
+    async def first() -> object:
+        return await call(**keywords)
+
+    asyncio.run(first())
+
+
+def renewals_query(make: Callable[..., Harness], **keywords: Any) -> list[tuple[str, str]]:
+    """The query `dashboard.list_renewals` sends with `keywords`, on either client."""
+    body = {"today": "2026-11-08", "page": None, "total": None, "data": []}
+    harness = make(lambda request: json_response({**body, "has_more": False, "next_cursor": None}))
+    list_renewals(harness, **keywords)
+    (request,) = harness.requests
+    return request.url.params.multi_items()
+
+
+def test_a_repeatable_parameter_is_sent_once_per_item_in_order(
+    make: Callable[..., Harness],
+) -> None:
+    # Two different items, so a writer that sent only the first, or joined them, fails.
+    assert renewals_query(make, renewal_term=["annual", "none"]) == [
+        ("renewal_term", "annual"),
+        ("renewal_term", "none"),
+    ]
+    assert renewals_query(make, renewal_term=("none", "monthly")) == [
+        ("renewal_term", "none"),
+        ("renewal_term", "monthly"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ([], "renewal_term is empty"),
+        ((), "renewal_term is empty"),
+        ("annual", "renewal_term is a str"),
+        ({"annual"}, "renewal_term is a set"),
+    ],
+)
+def test_a_repeatable_parameter_refuses_an_empty_or_non_sequence_value_before_sending(
+    make: Callable[..., Harness], value: object, message: str
+) -> None:
+    harness = make()
+    with pytest.raises(ValueError, match=message):
+        list_renewals(harness, renewal_term=value)
+    assert harness.requests == []
+
+
+def test_a_list_at_a_parameter_that_is_not_repeatable_is_still_refused(
+    make: Callable[..., Harness],
+) -> None:
+    harness = make()
+    with pytest.raises(ValueError, match="window is a list"):
+        list_renewals(harness, window=["overdue"])
+    assert harness.requests == []
+
+
+def test_a_date_is_sent_as_its_calendar_date(make: Callable[..., Harness]) -> None:
+    assert renewals_query(make, today=date(2026, 11, 8)) == [("today", "2026-11-08")]

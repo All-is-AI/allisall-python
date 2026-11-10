@@ -105,6 +105,8 @@ def _builder(annotation: object) -> Builder:
         return _sequence_builder(_builder(args[0]))
     if origin is collections.abc.Mapping and args == (str, Any):
         return _free_form
+    if origin is collections.abc.Mapping and len(args) == 2 and args[0] is str:
+        return _mapping_builder(_builder(args[1]))
     raise TypeError(f"the response decoder does not support the annotation {annotation!r}")
 
 
@@ -196,6 +198,18 @@ def _sequence_builder(item: Builder) -> Builder:
         return tuple(item(element, f"{pointer}/{index}") for index, element in enumerate(value))
 
     return build_sequence
+
+
+def _mapping_builder(member: Builder) -> Builder:
+    """A JSON object of typed members, such as an import mapping's `columns`, as a `dict`, as
+    free-form JSON is."""
+
+    def build_mapping(value: object, pointer: str) -> object:
+        if not isinstance(value, dict):
+            raise ShapeError(pointer, f"expected an object, found {_kind(value)}")
+        return {name: member(item, f"{pointer}/{escape(name)}") for name, item in value.items()}
+
+    return build_mapping
 
 
 def _money(value: object, pointer: str) -> object:

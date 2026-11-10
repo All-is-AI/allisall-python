@@ -4,8 +4,13 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from .._generated.requests import CalculationCreate
-from .._generated.responses import Calculation, CalculationList, CalculationSummary
+from .._generated.requests import CalculationCreate, CalculationState
+from .._generated.responses import (
+    Calculation,
+    CalculationList,
+    CalculationSummary,
+    WorkspaceCalculationList,
+)
 from .._options import CallOptions
 from .._pagination import AsyncPaginator, Page
 from .._transport import AsyncTransport, SyncTransport
@@ -20,6 +25,51 @@ class CalculationsResource:
 
     def __init__(self, transport: SyncTransport) -> None:
         self._transport = transport
+
+    def list(
+        self,
+        *,
+        client_id: str | None = None,
+        state: CalculationState | None = None,
+        month: str | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+        page: int | None = None,
+        timeout: float | None = None,
+        max_retries: int | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> Page[CalculationSummary, WorkspaceCalculationList]:
+        """List the workspace's calculations across clients, without snapshots.
+
+        Returns the first page; iterating it yields every calculation of every page from there.
+        `month` takes `YYYY-MM` and matches only a period that is exactly that calendar month in
+        UTC.
+
+        Calculations come latest period first, then newest first. `is_current` is decided among
+        each client's own calculations for the period, before any filter or page applies.
+
+        Pass `page` or `cursor`, not both. Pass `page` for a numbered page: the page's `body`
+        then holds `page` and `total`. Only that first page is counted; every later page of a
+        walk continues by cursor from it, and its `page` and `total` are `None`. To show another
+        numbered page, call this method again with its `page` rather than `get_next_page()`. A
+        `page` past the end has no items, and the walk ends there.
+
+        Needs the `read` scope. Operation `listCalculations`.
+        """
+        return self._transport.call_page(
+            "listCalculations",
+            WorkspaceCalculationList,
+            CalculationSummary,
+            query={
+                "client_id": client_id,
+                "state": state,
+                "month": month,
+                "limit": limit,
+                "cursor": cursor,
+                "page": page,
+            },
+            options=CallOptions(timeout=timeout, max_retries=max_retries, headers=headers),
+        )
 
     def create_for_client(
         self,
@@ -132,6 +182,51 @@ class AsyncCalculationsResource:
 
     def __init__(self, transport: AsyncTransport) -> None:
         self._transport = transport
+
+    def list(
+        self,
+        *,
+        client_id: str | None = None,
+        state: CalculationState | None = None,
+        month: str | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+        page: int | None = None,
+        timeout: float | None = None,
+        max_retries: int | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> AsyncPaginator[CalculationSummary, WorkspaceCalculationList]:
+        """List the workspace's calculations across clients, without snapshots.
+
+        Await the result for the first page, or iterate it with `async for` for every
+        calculation of every page. Nothing is sent until it is awaited or iterated. `month`
+        takes `YYYY-MM` and matches only a period that is exactly that calendar month in UTC.
+
+        Calculations come latest period first, then newest first. `is_current` is decided among
+        each client's own calculations for the period, before any filter or page applies.
+
+        Pass `page` or `cursor`, not both. Pass `page` for a numbered page: the page's `body`
+        then holds `page` and `total`. Only that first page is counted; every later page of a
+        walk continues by cursor from it, and its `page` and `total` are `None`. To show another
+        numbered page, call this method again with its `page` rather than `get_next_page()`. A
+        `page` past the end has no items, and the walk ends there.
+
+        Needs the `read` scope. Operation `listCalculations`.
+        """
+        return self._transport.call_page(
+            "listCalculations",
+            WorkspaceCalculationList,
+            CalculationSummary,
+            query={
+                "client_id": client_id,
+                "state": state,
+                "month": month,
+                "limit": limit,
+                "cursor": cursor,
+                "page": page,
+            },
+            options=CallOptions(timeout=timeout, max_retries=max_retries, headers=headers),
+        )
 
     async def create_for_client(
         self,

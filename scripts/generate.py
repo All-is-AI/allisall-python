@@ -45,9 +45,14 @@ HEADER = """\
 SCHEMA_REF = "#/components/schemas/"
 METHODS = ("get", "put", "post", "delete", "patch")
 
+# The access policies of the operations the SDK calls.
+CALLED_POLICIES = frozenset({"KeyOnly", "KeyOrSession", "Public"})
+
 # The access policies of the operations the SDK does not call: a signed-in session's
-# trust acts, and the share-token read.
-EXCLUDED_POLICIES = frozenset({"SessionOnly", "ShareToken"})
+# trust acts, the share-token read, an invite's redemption, and an invitee's workspace
+# creation. An operation under a policy in neither set is refused, so a new policy is
+# decided before the SDK calls or leaves out its operations.
+EXCLUDED_POLICIES = frozenset({"SessionOnly", "ShareToken", "InviteToken", "InviteeSession"})
 
 COMMON_FLAGS = (
     "--input-file-type",
@@ -118,14 +123,20 @@ RESPONSE_NAME_MAP: dict[str, str] = {"Client1": "AgentDetailClient"}
 
 def operations(spec: dict[str, Any]) -> Iterator[dict[str, Any]]:
     """Every operation the SDK calls: one with a `2xx` answer, not a `HEAD`, whose access
-    policy is neither a session's trust act nor the share-token read."""
+    policy is in `CALLED_POLICIES`. Raises `ValueError` for a policy in neither set."""
     for item in spec["paths"].values():
         for method in METHODS:
             operation = item.get(method)
             if operation is None:
                 continue
-            if operation["x-access"]["policy"] in EXCLUDED_POLICIES:
+            policy = operation["x-access"]["policy"]
+            if policy in EXCLUDED_POLICIES:
                 continue
+            if policy not in CALLED_POLICIES:
+                raise ValueError(
+                    f"{operation['operationId']} has the x-access policy {policy}, which the SDK"
+                    " neither calls nor leaves out"
+                )
             if not any(str(status).startswith("2") for status in operation["responses"]):
                 continue
             yield {

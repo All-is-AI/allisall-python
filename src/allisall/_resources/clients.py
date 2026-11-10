@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from .._generated.requests import ClientAgentsSet, ClientCreate, ClientPatch
+from .._generated.requests import ClientAgentsSet, ClientCreate, ClientPatch, ClientStatus
 from .._generated.responses import Client, ClientAgents, ClientDetail, ClientList
 from .._options import CallOptions
 from .._pagination import AsyncPaginator, Page
@@ -20,8 +20,11 @@ class ClientsResource:
     def list(
         self,
         *,
+        q: str | None = None,
+        status: ClientStatus | None = None,
         limit: int | None = None,
         cursor: str | None = None,
+        page: int | None = None,
         timeout: float | None = None,
         max_retries: int | None = None,
         headers: Mapping[str, str] | None = None,
@@ -30,13 +33,20 @@ class ClientsResource:
 
         Returns the first page; iterating it yields every client of every page from there.
 
+        `q` searches the client's name. Pass `page` or `cursor`, not both. Pass `page` for a
+        numbered page: the page's `body` then holds `page` and `total`. Only that first page is
+        counted; every later page of a walk continues by cursor from it, and its `page` and
+        `total` are `None`. To show another numbered page, call this method again with its
+        `page` rather than `get_next_page()`. A `page` past the end has no items, and the walk
+        ends there.
+
         Needs the `read` scope. Operation `listClients`.
         """
         return self._transport.call_page(
             "listClients",
             ClientList,
             Client,
-            query={"limit": limit, "cursor": cursor},
+            query={"q": q, "status": status, "limit": limit, "cursor": cursor, "page": page},
             options=CallOptions(timeout=timeout, max_retries=max_retries, headers=headers),
         )
 
@@ -51,6 +61,14 @@ class ClientsResource:
         idempotency_key: str | None = None,
     ) -> Client:
         """Create a client.
+
+        A `renewal_date` before the request's UTC date less one day is refused with `400`
+        `out_of_range`, so no time zone's today is refused. With a `renewal_term`, an active
+        client's renewal date rolls forward by whole terms once it passes.
+
+        `client_key` is unique in the workspace, ignoring letter case and surrounding
+        whitespace: a key another client already holds, in any case or padding, is refused
+        with `409` `client_key_in_use`.
 
         Every attempt of the call sends one `Idempotency-Key`, so a retry cannot create a
         second client. Pass `idempotency_key` to choose the key, such as one kept across a
@@ -102,6 +120,17 @@ class ClientsResource:
     ) -> Client:
         """Update a client with a merge patch: a key left out keeps its value, a key set to
         `None` clears the member, and any other value sets it.
+
+        Sending back the `renewal_date` a read returned keeps the client's renewal schedule: a
+        date on the schedule, up to the one it shows on the next UTC day, changes nothing. Any
+        other date is a new renewal date, and one before the request's UTC date less one day is
+        refused with `400` `out_of_range`. A patch that changes `renewal_term` or `status` saves
+        the date the client shows on the current UTC day as the new start of its schedule,
+        without the patch sending a date.
+
+        `client_key` is unique in the workspace, ignoring letter case and surrounding
+        whitespace: a key another client already holds, in any case or padding, is refused
+        with `409` `client_key_in_use`.
 
         Never retried.
 
@@ -178,8 +207,11 @@ class AsyncClientsResource:
     def list(
         self,
         *,
+        q: str | None = None,
+        status: ClientStatus | None = None,
         limit: int | None = None,
         cursor: str | None = None,
+        page: int | None = None,
         timeout: float | None = None,
         max_retries: int | None = None,
         headers: Mapping[str, str] | None = None,
@@ -189,13 +221,20 @@ class AsyncClientsResource:
         Await the result for the first page, or iterate it with `async for` for every client
         of every page. Nothing is sent until it is awaited or iterated.
 
+        `q` searches the client's name. Pass `page` or `cursor`, not both. Pass `page` for a
+        numbered page: the page's `body` then holds `page` and `total`. Only that first page is
+        counted; every later page of a walk continues by cursor from it, and its `page` and
+        `total` are `None`. To show another numbered page, call this method again with its
+        `page` rather than `get_next_page()`. A `page` past the end has no items, and the walk
+        ends there.
+
         Needs the `read` scope. Operation `listClients`.
         """
         return self._transport.call_page(
             "listClients",
             ClientList,
             Client,
-            query={"limit": limit, "cursor": cursor},
+            query={"q": q, "status": status, "limit": limit, "cursor": cursor, "page": page},
             options=CallOptions(timeout=timeout, max_retries=max_retries, headers=headers),
         )
 

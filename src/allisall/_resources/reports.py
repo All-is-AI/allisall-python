@@ -4,8 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from .._generated.requests import ReportPatch
-from .._generated.responses import Report, ReportList, ReportSummary, ReportWithPreview
+from .._generated.requests import ReportPatch, ReportState
+from .._generated.responses import (
+    Report,
+    ReportList,
+    ReportSummary,
+    ReportWithPreview,
+    WorkspaceReportList,
+)
 from .._options import CallOptions
 from .._pagination import AsyncPaginator, Page
 from .._transport import AsyncTransport, SyncTransport
@@ -20,6 +26,45 @@ class ReportsResource:
 
     def __init__(self, transport: SyncTransport) -> None:
         self._transport = transport
+
+    def list(
+        self,
+        *,
+        client_id: str | None = None,
+        state: ReportState | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+        page: int | None = None,
+        timeout: float | None = None,
+        max_retries: int | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> Page[ReportSummary, WorkspaceReportList]:
+        """List the workspace's reports across calculations, newest first, each without its
+        disclosures.
+
+        Returns the first page; iterating it yields every report of every page from there.
+
+        Pass `page` or `cursor`, not both. Pass `page` for a numbered page: the page's `body`
+        then holds `page` and `total`. Only that first page is counted; every later page of a
+        walk continues by cursor from it, and its `page` and `total` are `None`. To show another
+        numbered page, call this method again with its `page` rather than `get_next_page()`. A
+        `page` past the end has no items, and the walk ends there.
+
+        Needs the `read` scope. Operation `listReports`.
+        """
+        return self._transport.call_page(
+            "listReports",
+            WorkspaceReportList,
+            ReportSummary,
+            query={
+                "client_id": client_id,
+                "state": state,
+                "limit": limit,
+                "cursor": cursor,
+                "page": page,
+            },
+            options=CallOptions(timeout=timeout, max_retries=max_retries, headers=headers),
+        )
 
     def create_for_calculation(
         self,
@@ -157,6 +202,46 @@ class AsyncReportsResource:
 
     def __init__(self, transport: AsyncTransport) -> None:
         self._transport = transport
+
+    def list(
+        self,
+        *,
+        client_id: str | None = None,
+        state: ReportState | None = None,
+        limit: int | None = None,
+        cursor: str | None = None,
+        page: int | None = None,
+        timeout: float | None = None,
+        max_retries: int | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> AsyncPaginator[ReportSummary, WorkspaceReportList]:
+        """List the workspace's reports across calculations, newest first, each without its
+        disclosures.
+
+        Await the result for the first page, or iterate it with `async for` for every report of
+        every page. Nothing is sent until it is awaited or iterated.
+
+        Pass `page` or `cursor`, not both. Pass `page` for a numbered page: the page's `body`
+        then holds `page` and `total`. Only that first page is counted; every later page of a
+        walk continues by cursor from it, and its `page` and `total` are `None`. To show another
+        numbered page, call this method again with its `page` rather than `get_next_page()`. A
+        `page` past the end has no items, and the walk ends there.
+
+        Needs the `read` scope. Operation `listReports`.
+        """
+        return self._transport.call_page(
+            "listReports",
+            WorkspaceReportList,
+            ReportSummary,
+            query={
+                "client_id": client_id,
+                "state": state,
+                "limit": limit,
+                "cursor": cursor,
+                "page": page,
+            },
+            options=CallOptions(timeout=timeout, max_retries=max_retries, headers=headers),
+        )
 
     async def create_for_calculation(
         self,

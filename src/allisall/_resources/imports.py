@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from .._generated.responses import ImportPreview, ImportResult
+from .._generated.responses import Import, ImportList, ImportPreview, ImportResult, ImportSummary
 from .._multipart import ImportUpload
 from .._options import CallOptions
+from .._pagination import AsyncPaginator, Page
 from .._transport import AsyncTransport, SyncTransport
 
 
@@ -15,6 +16,58 @@ class ImportsResource:
 
     def __init__(self, transport: SyncTransport) -> None:
         self._transport = transport
+
+    def list(
+        self,
+        *,
+        limit: int | None = None,
+        cursor: str | None = None,
+        page: int | None = None,
+        timeout: float | None = None,
+        max_retries: int | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> Page[ImportSummary, ImportList]:
+        """List the workspace's imports, newest first, each with its counts.
+
+        Returns the first page; iterating it yields every import of every page from there.
+
+        Pass `page` or `cursor`, not both. Pass `page` for a numbered page: the page's `body`
+        then holds `page` and `total`. Only that first page is counted; every later page of a
+        walk continues by cursor from it, and its `page` and `total` are `None`. To show another
+        numbered page, call this method again with its `page` rather than `get_next_page()`. A
+        `page` past the end has no items, and the walk ends there.
+
+        Needs the `read` scope. Operation `listImports`.
+        """
+        return self._transport.call_page(
+            "listImports",
+            ImportList,
+            ImportSummary,
+            query={"limit": limit, "cursor": cursor, "page": page},
+            options=CallOptions(timeout=timeout, max_retries=max_retries, headers=headers),
+        )
+
+    def get(
+        self,
+        import_id: str,
+        /,
+        *,
+        timeout: float | None = None,
+        max_retries: int | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> Import:
+        """Read an import, with the mapping it ran with.
+
+        Pass that mapping to `to_import_mapping` to send it as the next import's mapping.
+
+        Needs the `read` scope. Operation `getImport`.
+        """
+        return self._transport.call(
+            "getImport",
+            Import,
+            path=[("import_id", import_id)],
+            options=CallOptions(timeout=timeout, max_retries=max_retries, headers=headers),
+        )
 
     def preview(
         self,
@@ -82,6 +135,59 @@ class AsyncImportsResource:
 
     def __init__(self, transport: AsyncTransport) -> None:
         self._transport = transport
+
+    def list(
+        self,
+        *,
+        limit: int | None = None,
+        cursor: str | None = None,
+        page: int | None = None,
+        timeout: float | None = None,
+        max_retries: int | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> AsyncPaginator[ImportSummary, ImportList]:
+        """List the workspace's imports, newest first, each with its counts.
+
+        Await the result for the first page, or iterate it with `async for` for every import of
+        every page. Nothing is sent until it is awaited or iterated.
+
+        Pass `page` or `cursor`, not both. Pass `page` for a numbered page: the page's `body`
+        then holds `page` and `total`. Only that first page is counted; every later page of a
+        walk continues by cursor from it, and its `page` and `total` are `None`. To show another
+        numbered page, call this method again with its `page` rather than `get_next_page()`. A
+        `page` past the end has no items, and the walk ends there.
+
+        Needs the `read` scope. Operation `listImports`.
+        """
+        return self._transport.call_page(
+            "listImports",
+            ImportList,
+            ImportSummary,
+            query={"limit": limit, "cursor": cursor, "page": page},
+            options=CallOptions(timeout=timeout, max_retries=max_retries, headers=headers),
+        )
+
+    async def get(
+        self,
+        import_id: str,
+        /,
+        *,
+        timeout: float | None = None,
+        max_retries: int | None = None,
+        headers: Mapping[str, str] | None = None,
+    ) -> Import:
+        """Read an import, with the mapping it ran with.
+
+        Pass that mapping to `to_import_mapping` to send it as the next import's mapping.
+
+        Needs the `read` scope. Operation `getImport`.
+        """
+        return await self._transport.call(
+            "getImport",
+            Import,
+            path=[("import_id", import_id)],
+            options=CallOptions(timeout=timeout, max_retries=max_retries, headers=headers),
+        )
 
     async def preview(
         self,

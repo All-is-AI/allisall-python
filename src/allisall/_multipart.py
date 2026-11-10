@@ -35,7 +35,9 @@ class ImportUpload(TypedDict):
     An open file object is not accepted, because a retry must send the same bytes again.
 
     `filename` is the file name the import records. It defaults to a path's base name, and
-    otherwise to `upload.csv`; an empty `filename` counts as none.
+    otherwise to `upload.csv`; an empty `filename` counts as none. A name longer than 255
+    characters, counted after any directory part separated by `/`, is refused with `400`
+    `too_long`.
     """
 
     mapping: Required[ImportMapping]
