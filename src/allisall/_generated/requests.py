@@ -108,6 +108,7 @@ How an event arrived: `api` for `POST /v1/events`, `csv` for a CSV import.
 
 
 DisclosureKind: TypeAlias = Literal[
+    "no_value_model",
     "empty",
     "unpriced",
     "key_unset",
@@ -122,7 +123,7 @@ DisclosureKind: TypeAlias = Literal[
     "truncated",
 ]
 """
-A coverage finding on a report. Each kind appears at most once per report. `facts` per kind: `empty` `{}`; `unpriced` `{outcome_types: [{outcome_type, quantity}], outcome_types_omitted}`, at most 100 outcome types by quantity, largest first, with `outcome_types_omitted` counting the rest, which a report composed before the count existed lacks; `key_unset` `{}`; `unmatched` `{keys}`; `unattributable` `{events}`; `precedes` `{}`; `unpriceable` `{models}`; `uncosted` `{events}`; `token_valued` `{events}`; `unattributed` `{line_items}`; `partial` `{line_items}`; `truncated` `{prorated_through}`.
+A coverage finding on a report. Each kind appears at most once per report. `no_value_model` means the client had no value model for the period. It replaces every other finding about value, so `empty`, `unpriced`, `key_unset`, `unmatched`, `unattributable` and `precedes` never appear beside it. `facts` per kind: `no_value_model` `{}`; `empty` `{}`; `unpriced` `{outcome_types: [{outcome_type, quantity}], outcome_types_omitted}`, at most 100 outcome types by quantity, largest first, with `outcome_types_omitted` counting the rest, which a report composed before the count existed lacks; `key_unset` `{}`; `unmatched` `{keys}`; `unattributable` `{events}`; `precedes` `{}`; `unpriceable` `{models}`; `uncosted` `{events}`; `token_valued` `{events}`; `unattributed` `{line_items}`; `partial` `{line_items}`; `truncated` `{prorated_through}`.
 """
 
 

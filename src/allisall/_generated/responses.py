@@ -152,9 +152,10 @@ class UndefinedReason(StrEnum):
 
 class DisclosureKind(StrEnum):
     """
-    A coverage finding on a report. Each kind appears at most once per report. `facts` per kind: `empty` `{}`; `unpriced` `{outcome_types: [{outcome_type, quantity}], outcome_types_omitted}`, at most 100 outcome types by quantity, largest first, with `outcome_types_omitted` counting the rest, which a report composed before the count existed lacks; `key_unset` `{}`; `unmatched` `{keys}`; `unattributable` `{events}`; `precedes` `{}`; `unpriceable` `{models}`; `uncosted` `{events}`; `token_valued` `{events}`; `unattributed` `{line_items}`; `partial` `{line_items}`; `truncated` `{prorated_through}`.
+    A coverage finding on a report. Each kind appears at most once per report. `no_value_model` means the client had no value model for the period. It replaces every other finding about value, so `empty`, `unpriced`, `key_unset`, `unmatched`, `unattributable` and `precedes` never appear beside it. `facts` per kind: `no_value_model` `{}`; `empty` `{}`; `unpriced` `{outcome_types: [{outcome_type, quantity}], outcome_types_omitted}`, at most 100 outcome types by quantity, largest first, with `outcome_types_omitted` counting the rest, which a report composed before the count existed lacks; `key_unset` `{}`; `unmatched` `{keys}`; `unattributable` `{events}`; `precedes` `{}`; `unpriceable` `{models}`; `uncosted` `{events}`; `token_valued` `{events}`; `unattributed` `{line_items}`; `partial` `{line_items}`; `truncated` `{prorated_through}`.
     """
 
+    NO_VALUE_MODEL = "no_value_model"
     EMPTY = "empty"
     UNPRICED = "unpriced"
     KEY_UNSET = "key_unset"
@@ -603,12 +604,12 @@ class ValueCoverageUnmatchedClientKey:
 @dataclass(frozen=True, kw_only=True)
 class ValueCoverage:
     """
-    Every way value could be missing from the total.
+    Every way value could be missing from the total. When `value_model` is `null` there is no total: `unpriced_outcome_types` and `unmatched_client_keys` are empty, with their `_omitted` counts `0`; `unattributable_outcome_events` is `0`; `line_items_empty` and `period_precedes_model` are `false`; and `client_key_unset` is reported as usual. A calculation snapshot taken earlier may still carry unpriced outcome types, unmatched client keys and unattributable outcome events here, so read `value_model` first.
     """
 
     unpriced_outcome_types: Sequence[OutcomeTypeUsage]
     """
-    Outcome types attributed to the client that no line item prices, by quantity, largest first, then by outcome type compared by Unicode code point. At most 100: `unpriced_outcome_types_omitted` counts the rest.
+    Outcome types attributed to the client that no line item prices, by quantity, largest first, then by outcome type compared by Unicode code point. At most 100: `unpriced_outcome_types_omitted` counts the rest. Empty when `value_model` is `null`: with no model nothing is priced, so no type is listed as unpriced.
     """
     unpriced_outcome_types_omitted: int
     """
@@ -616,7 +617,7 @@ class ValueCoverage:
     """
     unmatched_client_keys: Sequence[ValueCoverageUnmatchedClientKey]
     """
-    Event client keys that match no client in the workspace, by event count, largest first, then by client key compared by Unicode code point. At most 100: `unmatched_client_keys_omitted` counts the rest.
+    Event client keys that match no client in the workspace, by event count, largest first, then by client key compared by Unicode code point. At most 100: `unmatched_client_keys_omitted` counts the rest. Reported only when `value_model` is not `null`; otherwise empty.
     """
     unmatched_client_keys_omitted: int
     """
@@ -624,7 +625,7 @@ class ValueCoverage:
     """
     unattributable_outcome_events: int
     """
-    Outcome events in the workspace that attribute to no client.
+    Outcome events in the workspace that attribute to no client. Reported only when `value_model` is not `null`; otherwise `0`.
     """
     client_key_unset: bool
     """
@@ -649,7 +650,7 @@ class ValueResult:
     value_model: ValueModelRef | None
     lines: Sequence[ValueLine]
     """
-    One line for each line item of the model, in line-item order, so at most 50. An outcome type no line item prices is never a line; it is listed in `coverage.unpriced_outcome_types`.
+    One line for each line item of the model, in line-item order, so at most 50. An outcome type no line item prices is never a line; when the client has a value model, it is listed in `coverage.unpriced_outcome_types`.
     """
     total: Decimal | None
     """
@@ -1190,7 +1191,7 @@ class CalculationSummary:
     """
     coverage_findings: int
     """
-    How many coverage findings the calculation's frozen figures hold: the disclosures a report on it would list, including those a report leaves out of the shared copy by default.
+    How many coverage findings the calculation's frozen figures hold: the disclosures a report composed from it would list, including those a report leaves out of the shared copy by default. When the client had no value model for the period, the findings about value count as one, `no_value_model`. A report keeps the disclosures it was composed with, so a report composed earlier can list a different set, more or fewer than this count.
     """
 
 
@@ -1250,7 +1251,7 @@ class Report:
     """
     disclosures: Sequence[Disclosure]
     """
-    In the order the calculation's coverage produced them. At most 12: each kind appears at most once.
+    In the order the calculation's coverage produced them. At most 12: each kind appears at most once, and `no_value_model` never appears beside the six findings about value it replaces.
     """
     share_token: str | None
     """
@@ -1369,7 +1370,7 @@ class PublicReport:
     """
     disclosures: Sequence[Disclosure]
     """
-    The included findings only, in report order. At most 12: each kind appears at most once.
+    The included findings only, in report order. At most 12: each kind appears at most once, and `no_value_model` never appears beside the six findings about value it replaces.
     """
     period: Period
     currency: Currency
@@ -1490,11 +1491,11 @@ class Dashboard:
     """
     agent_costs: Sequence[AgentCostLine]
     """
-    The five agents with the highest cost, by `total`, largest first, then by `agent_id`.
+    The five agents with the highest cost across the counted clients' figures, by `total`, largest first, then by `agent_id`. An agent serving several clients is one entry, with its cost summed across them. Only a figure that records cost per agent contributes: `agent_costs_recorded` says how many do. Fewer than five when fewer agents appear in those figures.
     """
     agent_costs_recorded: int
     """
-    Agents with recorded cost in the month.
+    How many counted clients have a figure that records cost per agent. A figure records cost per agent even when no agent has any cost. Compare it with `counted`. When it is lower, some figures were published before the API recorded cost per agent, and they never gain it, so `agent_costs` ranks agents over only part of `cost_total`.
     """
     unpriced_outcome_types: Sequence[DashboardUnpricedOutcomeType]
     """

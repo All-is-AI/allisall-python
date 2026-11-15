@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0 (2026-11-15)
+
+* Built against API version 0.5.0
+* Ingest unchanged
+
+### Features
+
+* **sdk:** add the no_value_model disclosure kind
+
 ## 0.4.0 (2026-11-10)
 
 * Built against API version 0.4.0
